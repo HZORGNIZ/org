@@ -11,6 +11,7 @@
 | 项 | 值 |
 | --- | --- |
 | 生产域名 | **https://hzai.work**（`www.hzai.work` 301 到主域名） |
+| 代码仓库 | **git@github.com:HZORGNIZ/org.git**（每次发布必须 push；每日开发前先 pull，见 §5 硬性规定） |
 | 服务器公网 IP | **124.223.100.121**（腾讯云 CVM） |
 | SSH 登录用户 | **root** |
 | SSH 私钥 | 仓库根目录 `202609yangli-tencent腾讯云.pem` |
@@ -131,7 +132,11 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://hzai.work/api/agent/config  # 
 
 ## 5. 标准发布流程
 
-历史批次脚本（`.local/deploy176.sh` 为最新一版范例）固化了同一套流程，**照抄结构、只换批次号**。
+历史批次脚本（`.local/deploy177.sh` 为最新一版范例）固化了同一套流程，**照抄结构、只换批次号**。
+
+> **两条硬性规定（2026-11-09 起生效）**
+> 1. **每次发布最后一步必须 `git push origin main`**：生产代码必须等于 GitHub main 最新提交，不允许只部署不推送。
+> 2. **每天开始开发前先 `git pull origin main`**（或 `git fetch` + `git status` 对比），确认本地与远程一致后再动代码，避免在旧版本上开发产生冲突。
 
 ### 5.1 本地打包
 
@@ -179,6 +184,20 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://hzai.work/api/agent/config
 ```
 
 **关键设计**：先校验、再备份、再构建、最后切换。任一环节失败就停在原地，旧镜像继续跑，不产生半上线状态。
+
+### 5.3.1 发布收尾：提交并推送 GitHub（必做）
+
+探活通过后，回到本地把本次发布涉及的源码变更（含部署中改动的文件）提交并推送：
+
+```bash
+git add <本次改动文件>
+git commit -m "deployN: <本次发布内容摘要>"
+git push origin main
+```
+
+- 生产代码必须与 `origin/main` 最新提交一致，这是回滚与排查的基准线。
+- 推送前确认 `git status` 干净（没有本次发布遗漏的文件）。
+- 若推送失败（如磁盘满、凭据问题），**必须先解决再收工**，不允许留"已部署未推送"的状态过夜。
 
 ### 5.4 数据库结构变更
 
