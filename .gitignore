@@ -30,3 +30,5 @@ id_ed25519*
 .trae/
 *_tmp.*
 verify_*_tmp.sql
+q.sql
+scripts/q.sql
