@@ -1,0 +1,709 @@
+/* 全局样式：H5 优先，PC 自适应 */
+:root {
+  --app-header-h: 48px;
+  --app-tabbar-h: 56px;
+  --app-max-w: 1100px;
+  /* 品牌色：宝蓝 / 晴空蓝（与登录页主色一致） */
+  --app-brand: #428bff;
+  --app-brand-deep: #2f6fe0;
+  --app-brand-ink: #1b4fa8;
+  --app-navy: #123e86;
+  --app-navy-dark: #0f3572;
+  /* 视觉层次：浅宝蓝内容底 + 深宝蓝结构块，保证功能区边界清晰 */
+  --app-bg: #edf2fa;
+  --app-border: #dbe6f5;
+  --app-ink: #1f2d3d;
+  --app-heading: #123e86;
+  --app-heading-2: #2f6fe0;
+  --app-band: #e9f1fe;
+  --card-pad: 14px;
+  /* 控件圆角统一靠卡片圆角一档（EP 默认 4px 在首页那套大圆角里显得碎） */
+  --el-border-radius-base: 8px;
+
+  /* ---- 设计 token：间距 / 字号 / 圆角 / 文本灰阶 ----
+     首页（深蓝渐变 hero + 白卡 + 胶囊小页签 + 深宝蓝标题带）已定为全站基准，
+     其余页面统一引用这些变量，避免同一层级的文字在各页各写一个 px 而逐年走形 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px; /* 块与块之间的标准间距（卡片下边距、页签下边距、筛选行间距） */
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --fs-2xs: 11px; /* 微标签：榜单角标、键名、底部导航文字（首页同源档位） */
+  --fs-xs: 12px; /* 辅助说明、列标签、徽章 */
+  --fs-sm: 13px; /* 正文、表格内容、页签 */
+  --fs-md: 14px; /* 稍重的正文、表单 */
+  --fs-lg: 15px; /* 卡片内小标题 */
+  --fs-xl: 17px; /* 弹窗 / 区块主标题 */
+  --fs-page: 19px; /* 页面级深色页头 */
+  --fs-num: 24px; /* 统计卡大数字（与首页进度指标同一档） */
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+  /* 胶囊页签与列标签的固定配色（与首页右栏榜单小 tab 同源） */
+  --chip-ink: #4b6b99;
+  --chip-line: #dbe7fb;
+  --row-head-ink: #8a99b3;
+
+  /* Element Plus 主色统一为品牌宝蓝（含 hover / 浅底派生色） */
+  --el-color-primary: #428bff;
+  --el-color-primary-light-3: #7baeff;
+  --el-color-primary-light-5: #a0c5ff;
+  --el-color-primary-light-7: #c6dcff;
+  --el-color-primary-light-8: #d9e8ff;
+  --el-color-primary-light-9: #ecf3ff;
+  --el-color-primary-dark-2: #356fcc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--app-bg);
+  color: var(--app-ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+a {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+
+/* 原生表单控件不继承字体（浏览器默认走 sans-serif → 实际解析成 Arial），统一成全局字族 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* 页面容器 */
+.page {
+  max-width: var(--app-max-w);
+  margin: 0 auto;
+  padding: var(--sp-3) var(--sp-3) calc(var(--app-tabbar-h) + 20px);
+  /* 页内未单独指定字号的文字一律按正文 13px，不然漏写的 span/div 会退回浏览器默认 16px，在各页显得大小不一 */
+  font-size: var(--fs-sm);
+}
+
+.page-card {
+  background: #fff;
+  border: 1px solid var(--app-border);
+  border-radius: var(--r-md);
+  padding: var(--card-pad);
+  margin-bottom: var(--sp-3);
+  box-shadow: 0 2px 8px rgba(18, 62, 134, 0.06);
+}
+
+/* 页面级标题：深宝蓝页头，作为全站统一的深色基准块 */
+.page-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  margin: var(--sp-1) 0 var(--sp-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+/* 页头横幅：整站同一块深宝蓝渐变。有的页面标题直接挂在 .page 下，
+   有的把「标题 + 统计 / 标题 + 按钮」包在一层容器里（.page-head / .page-title-row），
+   三种结构都走同一套深色块，深色只出现在最外层，不会出现深块套深块 */
+.page > .page-title,
+.page > .page-head,
+.page > .page-title-row {
+  color: #fff;
+  background: linear-gradient(135deg, var(--app-navy-dark) 0%, var(--app-navy) 45%, var(--app-brand-ink) 75%, var(--app-brand) 100%);
+  border-radius: var(--r-md);
+  padding: var(--card-pad) var(--sp-4);
+  margin: 0 0 var(--card-pad);
+  flex-wrap: wrap;
+  box-shadow: 0 6px 18px rgba(18, 62, 134, 0.28);
+}
+.page > .page-title {
+  font-size: var(--fs-page);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  gap: 10px;
+}
+/* 包在容器里的标题：字号字重与直接挂在 .page 下的页头一致，但自身不再带底色与外边距 */
+.page > .page-head .page-title,
+.page > .page-title-row .page-title {
+  font-size: var(--fs-page);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: inherit;
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  box-shadow: none;
+}
+/* 横幅内的辅助文字、统计块、描边按钮统一改成半透明白，保持深色块上的可读性 */
+.page > .page-head .muted,
+.page > .page-title-row .muted {
+  color: rgba(255, 255, 255, 0.78);
+}
+.page > .page-head .stat {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+}
+.page > .page-head .stat-n {
+  color: #fff;
+}
+.page > .page-head .stat-k {
+  color: rgba(255, 255, 255, 0.72);
+}
+.page > .page-head .el-button.is-plain,
+.page > .page-title-row .el-button.is-plain {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.38);
+  color: #fff;
+}
+.page > .page-head .el-button.is-plain:hover,
+.page > .page-title-row .el-button.is-plain:hover {
+  background: rgba(255, 255, 255, 0.26);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+}
+.page > .page-title .el-button.is-text:not(.is-disabled),
+.page > .page-head .el-button.is-text:not(.is-disabled),
+.page > .page-title-row .el-button.is-text:not(.is-disabled) {
+  color: #cfe3ff;
+}
+.page > .page-title .el-button.is-text:not(.is-disabled):hover,
+.page > .page-head .el-button.is-text:not(.is-disabled):hover,
+.page > .page-title-row .el-button.is-text:not(.is-disabled):hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* 卡片内标题：深宝蓝条带 + 白色标题，形成「深标题-浅内容」的节奏，清晰划分功能块 */
+.page-card > .page-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #16417f 0%, #1d55b0 55%, var(--app-brand-deep) 100%);
+  border-bottom: 1px solid #123e86;
+  /* 9px = 卡片 10px 圆角减 1px 边框，让标题带的上角与卡片外沿贴合，不是随手写的碎值 */
+  border-radius: 9px 9px 0 0;
+  padding: 10px var(--card-pad);
+  margin: calc(-1 * var(--card-pad)) calc(-1 * var(--card-pad)) var(--sp-3);
+  min-height: 42px;
+  gap: var(--sp-2);
+  justify-content: flex-start;
+  letter-spacing: 0.01em;
+}
+.page-card > .page-title::before {
+  content: '';
+  width: 3px;
+  height: 15px;
+  border-radius: 2px;
+  background: #8cc2ff;
+  flex-shrink: 0;
+}
+.page-card > .page-title .el-button:last-child {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+/* 深色条带内的文字按钮改为浅蓝白，保证可读性 */
+.page-card > .page-title .el-button.is-text:not(.is-disabled) {
+  color: #d7e7ff;
+}
+.page-card > .page-title .el-button.is-text:not(.is-disabled):hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+.page-card > .page-title .muted {
+  color: #c3d9f7;
+}
+
+/* 顶部大页签与第一张卡之间的标准呼吸（各页原先 0 / 10 / 12 / 14 四种） */
+.el-tabs--top > .el-tabs__header {
+  margin: 0 0 var(--sp-3);
+}
+
+/* ---- 顶部大页签：统一成首页榜单小页签那套胶囊语言 ----
+   原先十几个页面各自用 Element 默认下划线式（有的再加一层渐变底带），
+   跟首页不是一个语言；现在改成：描边胶囊 + 选中主色渐变，去掉整条灰底线与下划线 active-bar */
+.el-tabs--top > .el-tabs__header .el-tabs__nav-wrap::after {
+  display: none;
+}
+.el-tabs--top > .el-tabs__header .el-tabs__active-bar {
+  display: none;
+}
+.el-tabs--top > .el-tabs__header .el-tabs__nav {
+  gap: 6px;
+  float: none;
+}
+.el-tabs--top > .el-tabs__header .el-tabs__item {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  line-height: 1;
+  padding: 0 var(--sp-4);
+  margin: 0;
+  border: 1px solid var(--chip-line);
+  border-radius: var(--r-md);
+  background: #fff;
+  color: var(--chip-ink);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.el-tabs--top > .el-tabs__header .el-tabs__item:hover {
+  border-color: var(--app-brand-ink);
+  color: var(--app-brand-ink);
+  background: var(--app-band);
+}
+.el-tabs--top > .el-tabs__header .el-tabs__item.is-active {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--app-brand-ink) 0%, var(--app-heading-2) 100%);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(27, 79, 168, 0.26);
+}
+/* EP 默认给首项 nth-child(2)、末项 last-child 单边 padding 清零（下划线式贴边用），
+   胶囊式会让首尾两个 tab 文字偏左/偏右；用 :nth-of-type 抬高特异性盖回对称（0,5,1 > 0,4,1，无需 !important） */
+.el-tabs--top > .el-tabs__header .el-tabs__nav .el-tabs__item:nth-of-type(n+1) {
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+/* 页签溢出时左右滚动箭头（手机 / 管理后台六个页签）跟胶囊同色系，不要默认灰 */
+.el-tabs--top > .el-tabs__header .el-tabs__nav-prev,
+.el-tabs--top > .el-tabs__header .el-tabs__nav-next {
+  color: var(--chip-ink);
+  line-height: 32px;
+}
+/* 左侧竖排页签（资料库 / 部分详情面板）不适用胶囊，保持默认 */
+.el-tabs--left > .el-tabs__header .el-tabs__item,
+.el-tabs--right > .el-tabs__header .el-tabs__item {
+  height: auto;
+  border-radius: var(--r-sm);
+}
+
+/* 弹窗 / 抽屉标题：全站一档 17px / 600（EP 默认 16px / 500，与各面板自带标题不齐） */
+.el-dialog__title,
+.el-drawer__title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--app-heading);
+}
+
+/* 胶囊页签里的分段控件（卡内二选一 / 三选一的 el-radio-group）字号与行高对齐正文 */
+.el-radio-button__inner {
+  font-size: var(--fs-sm);
+}
+
+/* ---- 工具栏/视图切换器（不在 el-form-item 里的 el-radio-group）----
+   它们本质是「页签」，之与顶部 tab 长得不一样（EP 默认是拼接的方块按钮）；
+   这里跟页签同一套胶囊语言；表单里的单选项（性别 / 优先级 / 写日报频率等）仍保持默认拼接样式 */
+.el-radio-group:not(.el-form-item .el-radio-group) {
+  gap: 6px;
+}
+.el-radio-group:not(.el-form-item .el-radio-group) .el-radio-button {
+  margin: 0;
+}
+.el-radio-group:not(.el-form-item .el-radio-group) .el-radio-button__inner {
+  border: 1px solid var(--chip-line);
+  border-radius: var(--r-md);
+  background: #fff;
+  color: var(--chip-ink);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 6px 14px;
+  box-shadow: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.el-radio-group:not(.el-form-item .el-radio-group) .el-radio-button__inner:hover {
+  border-color: var(--app-brand-ink);
+  color: var(--app-brand-ink);
+  background: var(--app-band);
+}
+.el-radio-group:not(.el-form-item .el-radio-group) .el-radio-button.is-active .el-radio-button__inner {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--app-brand-ink) 0%, var(--app-heading-2) 100%);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(27, 79, 168, 0.26);
+}
+
+.muted {
+  color: #7b8798;
+  font-size: var(--fs-xs);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 富文本/知识库正文 */
+.markdown-body {
+  line-height: 1.75;
+  font-size: 15px;
+  word-break: break-word;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin-top: 18px;
+  margin-bottom: 8px;
+}
+.markdown-body code {
+  background: #f0f2f5;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.markdown-body pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  background: transparent;
+  color: inherit;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--el-color-primary);
+  margin: 8px 0;
+  padding-left: 12px;
+  color: #606266;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* PC 端适配 */
+@media (min-width: 768px) {
+  .page {
+    padding: var(--sp-5) var(--sp-5) 40px;
+  }
+  .page-card {
+    --card-pad: 18px;
+  }
+}
+
+/* 表格表头：深宝蓝底 + 白字，与卡片深色标题带呼应，数据区更正式 */
+.el-table th.el-table__cell {
+  background: linear-gradient(180deg, #1a4a9e 0%, #123e86 100%);
+  color: #fff;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  letter-spacing: 0.02em;
+  padding: 9px 0;
+}
+.el-table th.el-table__cell .cell {
+  color: #fff;
+  padding: 0 10px;
+}
+/* 固定列（sticky）的表头：EP 用 background 简写给它铺白，会把深色渐变整块冲掉，
+   结果白底白字看不见表头文字，与其它列头也不统一；只补 th，td 仍需不透明底色遮住滚过的内容 */
+.el-table th.el-table__cell.el-table-fixed-column--left,
+.el-table th.el-table__cell.el-table-fixed-column--right {
+  background: linear-gradient(180deg, #1a4a9e 0%, #123e86 100%);
+}
+/* 首尾列表头跟随卡片圆角，表格嵌在白卡里不露直角 */
+.el-table th.el-table__cell:first-child .cell {
+  border-top-left-radius: var(--r-sm);
+}
+.el-table th.el-table__cell:last-child .cell {
+  border-top-right-radius: var(--r-sm);
+}
+.el-table td.el-table__cell {
+  font-size: var(--fs-sm);
+}
+/* 表格内的排序箭头、表头分割线保持浅色可读 */
+.el-table th.el-table__cell.el-table__cell.is-leaf {
+  border-bottom: 1px solid #0f3572;
+}
+.el-table thead .sort-caret.ascending {
+  border-bottom-color: #a9c9f2;
+}
+.el-table thead .sort-caret.descending {
+  border-top-color: #a9c9f2;
+}
+
+/* ---- 轻行头一档（各面板手写的 grid 行头，不是 el-table）----
+   以前每个面板各写一份灰度（#9aa6b8 / #8a99b3 / #7b8798）与字号（11 / 12）；
+   现在统一引用 --fs-xs / --row-head-ink，与 el-table 深表头形成「重表头 / 轻行头」两级
+   （见 TaskBoardPanel .tb-row.head、ReportsTeamDetail .column-labels） */
+
+/* ---- 计数小徽章：各面板分组标题右侧的「（4）」同一档 ----
+   以前在 4 个组件里各写一遍，颜色还分 #909399 / #7a879c 两种 */
+.section-count,
+.tb-group-count,
+.pbc-count,
+.pd-count {
+  font-size: var(--fs-xs);
+  color: var(--row-head-ink);
+  background: #f0f2f5;
+  border-radius: 10px;
+  padding: 0 8px;
+  line-height: 18px;
+}
+
+/* ---- 胶囊筛选 chip（各面板手写的小切换器，非 el-radio-group）---- */
+.tb-chip,
+.rr-tab {
+  border: 1px solid var(--chip-line);
+  background: #fff;
+  color: var(--chip-ink);
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.tb-chip:hover,
+.rr-tab:hover {
+  border-color: var(--app-brand-ink);
+  color: var(--app-brand-ink);
+  background: var(--app-band);
+}
+.tb-chip.active,
+.rr-tab.on {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--app-brand-ink) 0%, var(--app-heading-2) 100%);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 弹窗内富文本最大宽度 */
+.el-dialog .markdown-body,
+.el-drawer .markdown-body {
+  max-width: 100%;
+}
+
+/* ===== 移动端弹窗适配 ===== */
+
+/* 确认框（ElMessageBox）默认固定 420px，窄屏下超出屏幕 → 跟随视口收缩 */
+.el-message-box {
+  width: min(420px, calc(100vw - 32px));
+}
+
+/* 弹窗/抽屉内日期时间选择器默认占满容器宽度：Element Plus 编辑器默认固定 220px，
+   窄容器（如手机弹窗两列布局）会被撑破导致输入框超出屏幕 */
+.el-dialog .el-date-editor.el-input,
+.el-dialog .el-date-editor.el-input__wrapper,
+.el-drawer .el-date-editor.el-input,
+.el-drawer .el-date-editor.el-input__wrapper {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 手机屏高有限：限制弹窗最大高度并让内容区滚动，保证标题与底部按钮始终可见 */
+@media (max-width: 767px) {
+  /* 页头在窄屏收紧，避免深色块占比过大 */
+  .page > .page-title,
+  .page > .page-head,
+  .page > .page-title-row {
+    font-size: var(--fs-xl);
+    padding: var(--sp-3) var(--card-pad);
+  }
+  .page > .page-head .page-title,
+  .page > .page-title-row .page-title {
+    font-size: var(--fs-xl);
+  }
+  .el-dialog {
+    margin: min(8vh, 64px) auto 12px;
+    max-height: calc(100vh - min(8vh, 64px) - 12px);
+    max-height: calc(100dvh - min(8vh, 64px) - 12px);
+    display: flex;
+    flex-direction: column;
+  }
+  .el-dialog__header,
+  .el-dialog__footer {
+    flex-shrink: 0;
+  }
+  .el-dialog__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  /* 顶部胶囊页签在窄屏下压缩内边距与字号，并允许换行成多行：
+     默认 0 20px 时，四个 5 字 tab 就要 348，五个直接 413，而可用宽只有 366（390 屏）/336（360 屏）。
+     换行后不会触发 el-tabs 的 scrollable 判定（不超宽），也就不会出现只能靠小箭头发现还能滑的情况 */
+  .el-tabs--top > .el-tabs__header .el-tabs__nav {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+    float: none;
+  }
+  .el-tabs--top > .el-tabs__header .el-tabs__item {
+    height: 28px;
+    padding: 0 10px;
+    font-size: var(--fs-xs);
+    flex: 0 0 auto;
+  }
+  /* 窄屏同理：首尾两项的单边清零要在媒体查询内也压回去（特异性高于 EP 默认） */
+  .el-tabs--top > .el-tabs__header .el-tabs__nav .el-tabs__item:nth-of-type(n+1) {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .el-tabs--top > .el-tabs__header .el-tabs__nav-prev,
+  .el-tabs--top > .el-tabs__header .el-tabs__nav-next {
+    line-height: 28px;
+  }
+}
+
+/* 手机屏上六个页签：上一段已让胶囊页签换行，所以不再需要给管理后台单独压一档
+   （以前压到 padding 0 6px / 11px，六个 tab 挤成一行反而看不清） */
+
+/* 超窄屏（折叠屏外屏等）下日期/时间选择面板不超出屏幕 */
+@media (max-width: 360px) {
+  .el-picker-panel.el-date-picker {
+    max-width: calc(100vw - 8px);
+  }
+  .el-picker-panel.el-date-picker .el-picker-panel__content {
+    width: auto;
+  }
+}
+
+/* ---- 日报「文档式时间轴」统一样式（见 components/ReportDoc.vue）----
+   工作管理的历史日报、日报看板、项目详情页的项目日报共用同一形态：
+   左侧日期节点、右侧正文，像在线文档一样按天往下读；样式放在全局，避免三处各写一份逐年走形 */
+.rp-day {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding-bottom: 14px;
+}
+.rp-day:last-child {
+  padding-bottom: 0;
+}
+.rp-date {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1b4fa8;
+  line-height: 1.4;
+}
+.rp-sub {
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+}
+.rp-body {
+  position: relative;
+  padding-left: 14px;
+  border-left: 2px solid #e8eef8;
+}
+.rp-body::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 8px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #428bff;
+  border: 2px solid #fff;
+}
+.rp-group {
+  margin: 2px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7b8798;
+}
+.rp-entry {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid #eef2f8;
+  border-radius: 8px;
+  background: #fbfcfe;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.rp-entry:last-child {
+  margin-bottom: 0;
+}
+.rp-entry:hover {
+  border-color: #bcd4f5;
+  background: #f5f9ff;
+}
+/* 只看不点（看板 / 项目日报）：去掉手型与 hover，不让人误以为能开详情 */
+.rp-entry.is-plain {
+  cursor: default;
+}
+.rp-entry.is-plain:hover {
+  border-color: #eef2f8;
+  background: #fbfcfe;
+}
+.rp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rp-who {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+.rp-meta,
+.rp-dept {
+  font-size: var(--fs-2xs);
+}
+.rp-miss {
+  font-size: 12px;
+  color: #f56c6c;
+}
+.rp-entry.is-missing .rp-who {
+  color: #a8abb2;
+}
+.rp-open {
+  margin-left: auto;
+}
+.rp-text {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #414b59;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 没有详情抽屉可开的地方（看板 / 项目日报）不截断，否则正文看不全也点不开 */
+.rp-entry.is-full .rp-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  overflow: visible;
+}
+.rp-more {
+  margin-top: 8px;
+}
+@media (max-width: 767px) {
+  .rp-day {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .rp-body {
+    border-left: none;
+    padding-left: 0;
+  }
+  .rp-body::before {
+    display: none;
+  }
+  .rp-text {
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+  }
+}

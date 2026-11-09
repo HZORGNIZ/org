@@ -1,0 +1,56 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Queue } from 'bullmq';
+import { Redis } from 'ioredis';
+import { fmtBeijing } from '../../common/beijing-time';
+
+/**
+ * 任务逾期提醒队列（task-reminder）
+ * - check：检查逾期未完成任务并钉钉私聊提醒负责人（见 TaskReminderService）
+ * - 默认 cron `0 8-19 * * *`（北京时间每天 8-19 点整点各检查一次），
+ *   确保不落在晚上 8 点到次日早上 7 点的禁发时段（服务内还有第二道窗口校验）
+ */
+@Injectable()
+export class TaskReminderQueue {
+  readonly queue: Queue;
+  private readonly logger = new Logger(TaskReminderQueue.name);
+
+  constructor(config: ConfigService) {
+    const redisUrl = config.get<string>('REDIS_URL', 'redis://localhost:6379');
+    const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+    this.queue = new Queue('task-reminder', { connection });
+  }
+
+  /** 注册定时检查（幂等；tz 固定 Asia/Shanghai，避免 BullMQ 按 UTC 解释偏 8 小时） */
+  async schedule(cron: string) {
+    if (!cron || !cron.trim()) throw new Error('任务逾期提醒 cron 为空');
+    await this.queue.upsertJobScheduler(
+      'task-reminder:check',
+      { pattern: cron, tz: 'Asia/Shanghai' },
+      { name: 'check' },
+    );
+    this.logger.log(`任务逾期提醒已注册（cron: ${cron}）｜${await this.describeSchedulers()}`);
+  }
+
+  /** 当前已注册的调度器与下次触发时间（北京时间；启动自检日志用） */
+  async describeSchedulers(): Promise<string> {
+    try {
+      const items = (await this.queue.getJobSchedulers()) as any[];
+      if (!items?.length) return '当前无调度器';
+      return items
+        .map((s) => {
+          const id = s?.key ?? s?.id ?? s?.name ?? '?';
+          const next = typeof s?.next === 'number' ? fmtBeijing(new Date(s.next)) : '未知';
+          return `${id} 下次 ${next}`;
+        })
+        .join('；');
+    } catch {
+      return '调度器查询失败';
+    }
+  }
+
+  /** 手动触发一次检查（delayMs 可选延迟） */
+  async trigger(delayMs = 0) {
+    return this.queue.add('check', {}, { delay: delayMs, removeOnComplete: 100, removeOnFail: 1000 });
+  }
+}

@@ -1,0 +1,21 @@
+packages:
+  - apps/*
+# 构建授权：pnpm <=10 读顶层 onlyBuiltDependencies（数组）；
+# pnpm 11+ 需 allowBuilds map（升级 pnpm 时再迁移）
+onlyBuiltDependencies:
+  - prisma
+  - esbuild
+  - "@prisma/client"
+  - "@prisma/engines"
+  - sharp
+  - msgpackr-extract
+  - vue-demi
+pnpm:
+  onlyBuiltDependencies:
+    - prisma
+    - esbuild
+    - "@prisma/client"
+    - "@prisma/engines"
+    - sharp
+    - msgpackr-extract
+    - vue-demi

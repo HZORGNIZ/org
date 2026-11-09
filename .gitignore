@@ -1,0 +1,32 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+apps/api/logs/
+.local/
+.DS_Store
+apps/api/prisma/dev.db
+apps/api/uploads/
+apps/web/dev-dist/
+
+# 密钥与证书：服务器私钥绝不可入库
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# 临时/校验脚本产物
+*.tar.gz
+*.zip
+
+# 内部工具与临时文件
+.workbuddy/
+.trae/
+*_tmp.*
+verify_*_tmp.sql

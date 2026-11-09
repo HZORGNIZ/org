@@ -1,0 +1,59 @@
+{
+  "name": "api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "ts-node prisma/seed.ts",
+    "test:docx": "nest build && node scripts/test-docx-util.mjs",
+    "test:documents": "nest build && node scripts/test-documents-service.mjs"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.37",
+    "@nestjs/common": "^11.2.3",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.2.3",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/platform-express": "^11.2.3",
+    "@prisma/client": "^6.19.3",
+    "ai": "^7.0.79",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^6.2.1",
+    "cheerio": "^1.2.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "dingtalk-stream": "2.1.6-beta.1",
+    "ioredis": "^6.0.0",
+    "mammoth": "^1.12.2",
+    "minio": "^8.0.7",
+    "multer": "^2.2.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "reflect-metadata": "^0.2.2",
+    "rss-parser": "^3.13.0",
+    "rxjs": "^7.8.2",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/schematics": "^11.1.0",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.3.0",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/web-push": "^3.6.4",
+    "prisma": "^6.19.3",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,1770 @@
+// myorgniz 数据模型 - 团队 AI 协作系统
+// 约定: 所有表用 cuid 主键, 软删除通过字段标记, 时间戳统一 createdAt/updatedAt
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========== 枚举 ==========
+
+enum Role {
+  ADMIN // 系统管理员
+  DEPT_LEADER // 部门负责人
+  PROJECT_LEADER // 项目负责人
+  MEMBER // 普通成员
+}
+
+enum ProjectRole {
+  OWNER
+  MEMBER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ReportType {
+  DAILY
+  WEEKLY
+}
+
+enum ReportStatus {
+  DRAFT // AI 生成待确认
+  PUBLISHED // 已发布
+}
+
+enum NewsSourceType {
+  TEAM // 团队级资讯源（管理员配置）
+  PERSONAL // 个人定制资讯源
+}
+
+enum NewsItemStatus {
+  FETCHED // 已抓取待摘要
+  SUMMARIZED // 已 AI 摘要
+  PUSHED // 已推送
+}
+
+enum DocVisibility {
+  PUBLIC // 团队文档：全员可见
+  DEPARTMENT // 部门文档：部门内所有人可见
+  PROJECT // 项目文档：项目内所有人可见；项目主要关联部门的负责人亦可见
+  PRIVATE // 个人文档：仅作者可见，可授权他人查看/编辑
+}
+
+enum DocPermission {
+  VIEW // 查看
+  EDIT // 编辑
+}
+
+// 文档空间（上传文件）可见范围：全员可见需管理员审批
+enum FileVisibility {
+  DEPARTMENT // 部门文件：部门内所有人默认可见
+  PROJECT // 项目文件：项目内所有人默认可见（主要关联部门负责人也可见）
+  PRIVATE // 个人文件：仅上传者与管理员可见
+  PUBLIC // 全员可见：需管理员审批通过后才生效
+  EXTERNAL // 对外部可见：项目内成员默认可见，外部游客凭访问密码在分享页查看/下载（仅项目空间）
+}
+
+// 共享给全员的审批状态
+enum FileApproval {
+  NONE // 无需审批（部门/项目/个人范围）
+  PENDING // 待管理员审批（审批前仅上传者与管理员可见）
+  APPROVED // 已同意（全员可见生效）
+  REJECTED // 已驳回（仅上传者与管理员可见）
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum NotificationType {
+  TASK
+  ANNOUNCEMENT
+  REPORT
+  NEWS
+  BOOKING
+  MESSAGE
+  MEETING // 会议：邀请/开始提醒/待办指派/纪要发布
+  SYSTEM
+}
+
+enum InboxMessageType {
+  TEXT
+  IMAGE
+  FILE
+  AUDIO
+  VIDEO
+  LINK
+  OTHER
+}
+
+enum RetroKind {
+  STRUCTURED // 结构化问答复盘（固定 5 问）
+  GENERAL // 一般复盘（成员导入总结文档）
+}
+
+enum SopStatus {
+  CANDIDATE // AI 提取待人工确认
+  APPROVED // 已确认生效
+  REJECTED // 已拒绝
+}
+
+enum SopSourceType {
+  RETRO_EXTRACT // AI 从复盘提取
+  TEAM_EXTRACT // AI 从团队记录（群聊/日报/周报）提取
+  MANUAL // 人工新增
+}
+
+// 灵感/需求状态：新建 / 已转为项目或任务 / 归档
+enum IdeaStatus {
+  NEW // 新录入，未处理
+  CONVERTED // 已被 AI 规划并转为项目/任务
+  ARCHIVED // 归档（不在列表展示）
+}
+
+// 项目审批状态：创建后默认 PENDING（仅 owner+approver+ADMIN 可见）→ 同意转 ACTIVE，驳回转 REJECTED（owner 可改后重新提交）
+enum ProjectStatus {
+  PENDING // 待审批
+  ACTIVE // 已批准，正常参与项目列表/首页/成员/任务等所有可见性口径
+  REJECTED // 已驳回，仅 owner+approver+ADMIN 可见，owner 可修改后重新提交
+}
+
+// 项目健康度（AI 依据任务延期/交付窗口/里程碑得出的整体风险等级）
+enum HealthLevel {
+  GREEN // 良好
+  YELLOW // 需关注
+  RED // 高风险/延期
+}
+
+// 域名性质：个人注册 / 企业注册（项目资源盘点用）
+enum DomainNature {
+  PERSONAL // 个人
+  ENTERPRISE // 企业
+}
+
+// 用户反馈受理状态：未受理 / 已受理
+enum FeedbackStatus {
+  PENDING // 未受理（默认）
+  ACCEPTED // 已受理
+}
+
+// ========== 用户与身份 ==========
+
+// 部门（名称可增删改）：成员归属与项目「主要关联部门」的组织维度
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  leaderId    String? // 部门负责人（User）
+  managerIds  String[] @default([]) // 部门共管人（副负责人）：与 leaderId 同权限，管整个部门（大部门一人管不过来时增设）
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ---- 日报规则（部门负责人可设定，见 ReportReminderService）----
+  reportFrequency    String  @default("NONE") // NONE 不要求 / DAILY 每天 / WORKDAY 每个工作日 / WEEKLY_COUNT 每周自定义次数
+  reportWeeklyCount  Int? // reportFrequency=WEEKLY_COUNT 时：每周至少写几篇日报
+  reportRemindTime   String  @default("20:00") // 每日检查并提醒未写成员的时间（北京时间 HH:mm）
+  reportNotifyLeader Boolean @default(true) // 成员提交日报/周报/PBC 后是否实时钉钉私聊部门负责人
+
+  // ---- 部门会议默认关联群（会议活动管理·关联群配置，部门负责人/管理员可设）----
+  meetingGroupConversationId String? // 部门会议默认钉钉群 openConversationId
+  meetingGroupName           String? // 部门会议默认钉钉群名
+
+  leader      User?                   @relation("DeptLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members     User[]                  @relation("DeptMembers")
+  extraMembers User[]                 @relation("UserDepartments") // 额外加入本部门的成员（主部门之外）
+  projectLinks ProjectDepartment[] // 主要关联本部门的多个项目
+  docs        KnowledgeDoc[]          // 部门文档（Markdown）
+  memberNotes DepartmentMemberNote[] // 成员备注
+  folders     DocumentFolder[]        // 部门文档空间（文件夹）
+  files       DocumentFile[]          // 部门文档空间（文件）
+  meetingSlots DepartmentMeetingSlot[] // 周会周期位（一个部门可配多场）
+  meetings     Meeting[]              @relation("DeptMeetings") // 本部门自动/手动发起的会议
+
+  @@index([sortOrder])
+}
+
+// 项目 ↔ 主要关联部门（多对多）：关联部门的负责人有权查看该项目文档
+model ProjectDepartment {
+  id           String   @id @default(cuid())
+  projectId    String
+  departmentId String
+  createdAt    DateTime @default(now())
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, departmentId])
+  @@index([departmentId])
+}
+
+// 部门成员备注（管理员/部门负责人可编辑，每个部门内每位成员一条）
+model DepartmentMemberNote {
+  id           String   @id @default(cuid())
+  departmentId String
+  userId       String
+  note         String
+  authorId     String // 最近一次编写备注的人
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User       @relation("NotedUser", fields: [userId], references: [id], onDelete: Cascade)
+  author     User       @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userId])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  username  String?  @unique // 登录用户名（管理员创建的用户必填；老用户为空，登录时也可用邮箱）
+  email     String   @unique
+  password  String // bcrypt hash
+  phone     String? // 手机号（仅记录，无需短信验证）
+  employeeNo Int? @unique // 工号：按注册时间顺序分配的连续整数（1 起），创建用户时自动分配，不在排行榜等业务逻辑中使用
+  mustChangePassword Boolean @default(false) // 管理员创建的用户首次登录必须修改密码
+  avatar    String?
+  role      Role     @default(MEMBER)
+  active    Boolean  @default(true)
+  departmentId String? // 所属部门（单一部门）
+  reportsToId String? // 直属上级（汇报树自引用）；为空且有人汇报于他即视为总负责人（根节点）
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lastReportRemindAt DateTime? // 日报未写提醒：上次钉钉私聊提醒时间（每人每个北京日最多提醒一次）
+  workSlots   UserWorkSlot[] // 我的工作时间安排（每周固定时间段，决定当天是否属于应发日报人员）
+  pbc         Pbc[] // 月度 PBC（个人业务承诺）
+  agentSessions AgentSession[] // 管理者 Agent 悬浮窗会话历史
+
+  department     Department? @relation("DeptMembers", fields: [departmentId], references: [id], onDelete: SetNull)
+  reportsTo      User?    @relation("UserReports", fields: [reportsToId], references: [id], onDelete: SetNull)
+  subordinates   User[]   @relation("UserReports") // 直接汇报于我的下属（汇报树）
+  pbcReviewed    Pbc[]    @relation("PbcReviewer") // 我作为打分上级负责的 PBC 考核
+  ledDepartments Department[] @relation("DeptLeader")
+  extraDepartments Department[] @relation("UserDepartments") // 主部门之外加入的部门
+  notesWritten   DepartmentMemberNote[] @relation("NoteAuthor")
+  notesReceived  DepartmentMemberNote[] @relation("NotedUser")
+  docShares      DocShare[]
+  identities     UserIdentity[]
+  createdTasks   Task[]           @relation("TaskCreator")
+  assignedTasks  Task[]           @relation("TaskAssignee")
+  taskComments   TaskComment[]
+  taskActivities TaskActivity[]
+  announcements  Announcement[]
+  reports        Report[]
+  newsSources    NewsSource[]
+  newsSubs       NewsSubscription[]
+  projectMembers ProjectMember[]
+  ownedProjects  Project[]       @relation("ProjectOwner")
+  approvedProjects Project[]     @relation("ProjectApprover")
+  reviewedProjectApprovals ProjectApproval[] @relation("ProjectReviewer")
+  coReviewedProjects ProjectCoReview[] @relation("ProjectCoReviewer")
+  retroSubmissions RetroSubmission[]
+  createdRetros   ProjectRetro[]   @relation("RetroCreator")
+  proposedSops    Sop[]            @relation("SopProposer")
+  confirmedSops   Sop[]            @relation("SopConfirmer")
+  ideas           Idea[]
+  newsPref        UserNewsPref?
+  docAuthors     KnowledgeDoc[]   @relation("DocAuthor")
+  docUpdaters    KnowledgeDoc[]   @relation("DocUpdater")
+  docVersions    KnowledgeVersion[]
+  bookings       ResourceBooking[]
+  attachments    Attachment[]
+  notifications  Notification[]
+  docFolders     DocumentFolder[]   @relation("FolderCreator")
+  uploadedFiles  DocumentFile[]     @relation("FileUploader")
+  reviewedFiles  DocumentFile[]     @relation("FileReviewer")
+  fileVersions   DocumentFileVersion[]
+  ownedMeetings  Meeting[]            @relation("MeetingOwner") // 我发起/主持的会议
+  meetingsDocEdited Meeting[]         @relation("MeetingDocEditor") // 我最后编辑过文档的会议活动
+  meetingMaterials MeetingMaterial[]  @relation("MaterialOwner") // 我在会议里的会前材料
+  meetingAttendances MeetingAttendance[] @relation("AttendanceUser") // 我签到过的会议活动
+  meetingMakeups     MeetingAttendance[] @relation("AttendanceOperator") // 我补签过的考勤
+  praisesReceived    MeetingPraise[]   @relation("PraiseTarget") // 我在会议活动里被点赞
+  praisesGiven       MeetingPraise[]   @relation("PraiseAuthor") // 我给出的点赞
+  meetingScores      MeetingScore[]    @relation("MeetingScoreTarget") // 我在会议活动里得到的加分
+  meetingScoresMade   MeetingScore[]   @relation("MeetingScoreCreator") // 我给出的加分
+  meetingScoresAudited MeetingScore[]  @relation("MeetingScoreApprover") // 我审批过的加分
+  meetingGroupsLed   MeetingGroup[]    @relation("MeetingGroupLeader") // 我担任组长的活动小组
+  meetingGroupsCreated MeetingGroup[]  @relation("MeetingGroupCreator") // 我建的活动小组
+  meetingGroupMembers MeetingGroupMember[] @relation("MeetingGroupMember") // 我加入的活动小组
+  meetingGuestProfiles MeetingGuest[]    @relation("MeetingGuestUser") // 我扫码签到（姓名+手机号与注册用户一致）形成的来宾记录
+  meetingReviews   MeetingReview[]    @relation("MeetingReviewer") // 我写过的材料点评
+  meetingItems     MeetingItem[]      @relation("MeetingItemAssignee") // 指派给我的会议待办/风险/待处理
+  minutesWritten   Meeting[]          @relation("MeetingMinutesWriter") // 指派我撰写纪要的会议
+  ndaSigns         NdaSign[]          @relation("NdaSigner") // 我在保密项目里签署的协议
+  ndaTemplates     NdaVersion[]       @relation("NdaAuthor") // 我（管理员）编写过的协议版本
+  rulesCreated     ProjectRule[]      @relation("RuleAuthor") // 我发布过的项目规则
+  ruleAcks         ProjectRuleAck[]   @relation("RuleAckUser") // 我点过的项目规则已阅
+  invOwnedServers  InventoryServer[]   @relation("InventoryServerOwner") // 我负责的服务器（资源盘点）
+  invOwnedDomains  InventoryDomain[]   @relation("InventoryDomainOwner") // 我负责的域名（资源盘点）
+  invOwnedProjects ProjectInventory[]  @relation("InventoryOwner") // 我负责的项目盘点条目
+  invCreatedServers InventoryServer[]   @relation("InventoryServerCreator") // 我上传的服务器（创建人）
+  invCreatedDomains InventoryDomain[]   @relation("InventoryDomainCreator") // 我上传的域名（创建人）
+  invCreatedInventories ProjectInventory[] @relation("InventoryCreator") // 我上传的盘点条目（创建人）
+  feedback     Feedback[] // 我提交的使用体验反馈
+
+  @@index([reportsToId])
+}
+
+model UserIdentity {
+  id         String   @id @default(cuid())
+  userId     String
+  provider   String // dingtalk / wecom / feishu ...
+  externalId String // 外部平台用户 ID（钉钉 userId）
+  raw        Json? // 原始资料快照
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([userId])
+}
+
+// ========== 项目管理 ==========
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  description String?
+  color     String? // 看板主题色
+  archived  Boolean  @default(false)
+  deletedAt DateTime? // 软删除（移入回收站）时间；非空表示已删除，可在回收站恢复
+  // ---- 保密项目（仅 ADMIN 可拨开关；详见 docs/guard-prd.md F2）----
+  // 开启后：仅 owner + 已签署保密协议的项目成员可见（关联部门负责人不再默认可见），
+  //   首页不再对其展示进展摘要、每日进展不再群发到钉钉群；ADMIN 照常可见但每次查看写 AccessLog。
+  confidential  Boolean @default(false)
+  ownerId   String
+  // ---- 审批流（新建项目需上传需求文档 + 时间计划 → 上一级主管审批）----
+  status            ProjectStatus @default(ACTIVE) // 既有项目 db push 自动落到 ACTIVE；新建项目服务层强制初始化为 PENDING
+  startDate         DateTime? // 项目计划开始日（北京墙钟日期，仅到日）
+  endDate           DateTime? // 项目计划交付日（北京墙钟日期，仅到日）
+  approverId        String? // 审批人（提交瞬间冻结：owner 主部门负责人，无则最早注册的 ADMIN）
+  approvalNote      String? // 最近一次审批意见（驳回必填）
+  approvalSubmittedAt DateTime? // 最近一次提交审批的时间
+  requirementDocIds String[]     @default([]) // 需求文档 fileId 列表（走 DocumentFile/MinIO 通道）
+  // ---- 立项必填确认：里程碑/需求文档默认必填；勾选「本项目确定不需要」才豁免（发起者显式确认，审批人可见）----
+  skipMilestone     Boolean @default(false) // 创建人确认本项目不需要里程碑
+  skipRequirementDoc Boolean @default(false) // 创建人确认本项目不需要需求文档
+  // ---- AI 项目完成度/健康度快照（手动重算 或 GET 详情命中 24h 陈旧时后台补算）----
+  completionPercent Int?
+  healthLevel       HealthLevel?
+  healthPercent     Int? // 健康度 0-100 具体数值（AI 算出或规则兜底；首页大字号展示）
+  healthSummary     String?
+  healthRisks       String? // 多条换行分隔
+  healthSuggestions String? // 多条换行分隔
+  healthAnalyzedAt  DateTime?
+  dingtalkConversationId String? // 关联钉钉群 openConversationId
+  dingtalkGroupName      String? // 关联钉钉群名（冗余，展示用）
+  dailyDigestEnabled     Boolean @default(false) // 定时发送进展总结到该项目群总开关（仅控制群发；私聊汇总不受影响；默认关闭，需手动开启）
+  digestTime             String  @default("20:00") // 该项目群发进展总结的每日发送时间（HH:mm，北京时间；到该时刻后的首次 tick 触发）
+  digestEveryDays        Int     @default(1) // 群发频率：每 N 天一次（1=每天，2=每2天……）
+  digestLastSentDate     String? // 最近一次成功群发的北京日期 'YYYY-MM-DD'（用于频率 gating，每天最多发一次）
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User            @relation("ProjectOwner", fields: [ownerId], references: [id])
+  approver User?           @relation("ProjectApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  departments ProjectDepartment[] // 主要关联部门（可多个）
+  boards  KanbanBoard[]
+  tasks   Task[]
+  members ProjectMember[]
+  docs    KnowledgeDoc[]
+  folders   DocumentFolder[] // 项目文档空间（文件夹）
+  files     DocumentFile[]   // 项目文档空间（文件）
+  categories KnowledgeCategory[]
+  updates ProjectUpdate[]
+  reports Report[]
+  retros  ProjectRetro[]
+  sops    Sop[]
+  newsRule ProjectNewsRule?
+  ideas   Idea[]
+  approvals ProjectApproval[]
+  coReviews ProjectCoReview[] // 审批人加签的其他审批人
+  milestones ProjectMilestone[]
+  schedule   ProjectScheduleItem[] // 排期计划阶段（需求评审→开发→测试→联调→上线→验收…）
+  meetings   Meeting[] // 关联本项目的会议（会议待办落地任务时默认归属）
+  ndaSigns   NdaSign[] // 保密项目的协议签署记录
+  rules      ProjectRule[] // 项目规则（负责人/管理员发布，成员需已阅）
+  inventories ProjectInventory[] // 关联的资源盘点条目（可空，仅管理员维护）
+
+  @@index([ownerId])
+  @@index([approverId, status])
+  @@index([status])
+}
+
+// 项目审批历史（每次通过/驳回一条，重提交不写入；用于详情页展示时间线）
+model ProjectApproval {
+  id         String   @id @default(cuid())
+  projectId  String
+  reviewerId String // 审批人 userId
+  decision   String // APPROVED / REJECTED
+  note       String? // 审批意见（驳回必填）
+  createdAt  DateTime @default(now())
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewer User    @relation("ProjectReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([reviewerId])
+}
+
+// 审批加签：主审批人邀请其他人共同审批本项目；全部 PENDING 审批人才可批准生效
+model ProjectCoReview {
+  id         String   @id @default(cuid())
+  projectId  String
+  reviewerId String // 被加签人 userId
+  status     String   @default("PENDING") // PENDING 待审 / APPROVED 同意 / REJECTED 驳回
+  note       String? // 加签审批意见（驳回必填）
+  decidedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewer User    @relation("ProjectCoReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, reviewerId])
+  @@index([reviewerId, status])
+  @@index([projectId])
+}
+
+// 项目里程碑（可选，多条；用于「时间计划」与 AI 健康度分析）
+model ProjectMilestone {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  dueDate     DateTime // 里程碑到期日（北京墙钟日期）
+  description String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, dueDate])
+}
+
+// 项目排期计划（详情页「排期计划」页签）：一个项目按阶段铺开的时间计划
+// 与 ProjectMilestone 的区别：里程碑只有单个到期日（用于审批与健康度），排期阶段有「开始~结束」区间与状态
+model ProjectScheduleItem {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String // 阶段名：需求评审/开发/测试/联调/上线/验收，可自定义
+  startDate DateTime // 阶段开始（北京墙钟日期，仅到日，存 UTC 午夜）
+  endDate   DateTime // 阶段结束（同上）
+  status    String   @default("PLANNED") // PLANNED 未开始 / DOING 进行中 / DONE 已完成
+  note      String? // 交付物/备注
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, sortOrder])
+}
+
+// 项目进展（AI 从钉钉群聊自动总结，或手动记录）
+model ProjectUpdate {
+  id          String   @id @default(cuid())
+  projectId   String
+  content     String // 进展正文
+  keyPoints   String[] @default([]) // 要点列表
+  source      String // AI_GROUP（群聊AI总结）/ MANUAL / DAILY_REPORT（日报AI归属）
+  groupName   String? // 来源群名
+  reportId    String? // 来源日报（修订后重新 upsert 进展）
+  taskId      String? // 已转为/关联的任务（从进展创建任务后回链；前端以不同颜色标记「已转任务」）
+  periodStart DateTime // 覆盖的消息区间起
+  periodEnd   DateTime // 覆盖的消息区间止
+  createdAt   DateTime @default(now())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  report    Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  task      Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([reportId])
+  @@index([taskId])
+}
+
+model ProjectMember {
+  id        String      @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectRole @default(MEMBER)
+  position  String? // 项目内岗位（产品经理/工程师/运维等，选项清单可自定义）
+  createdAt DateTime    @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+// ========== 保密协议与访问留痕（docs/guard-prd.md F2 / F4） ==========
+
+// 全局保密协议模板（一份文本一个版本；最大 version 即当前生效版，管理员后台可编辑）
+model NdaVersion {
+  id          String   @id @default(cuid())
+  version     Int      @unique
+  content     String // Markdown 协议正文
+  createdById String? // 哪个管理员写的（可能已删除，故 SetNull）
+  createdAt   DateTime @default(now())
+
+  createdBy User?     @relation("NdaAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  signings  NdaSign[]
+}
+
+// 一人一项目一条签署记录（点「我已阅读」即落库；记到具体版本，事后可追溯签的是哪一版）
+model NdaSign {
+  id           String   @id @default(cuid())
+  projectId    String
+  userId       String
+  ndaVersionId String
+  createdAt    DateTime @default(now()) // 签署时间
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User       @relation("NdaSigner", fields: [userId], references: [id], onDelete: Cascade)
+  ndaVersion NdaVersion @relation(fields: [ndaVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+// 保密项目访问留痕：只在资源属于 confidential 项目时写，非保密项目一律不写。
+// 故意不建外键关系：人员被删/项目被删后审计记录必须仍然存在，因此姓名与资源名均存快照。
+// 时间口径：createdAt 存【北京墙钟字面量】（同 AiCallLog，展示与查询不做时区换算）。
+model AccessLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime
+  userId    String
+  userName  String // 快照：改名/删除后日志仍可读
+  action    String // ENTER 进入详情 / VIEW 预览 / DOWNLOAD 下载
+  resType   String // PROJECT 项目详情 / DOCFILE 上传文件 / KNOWLEDGE_DOC 知识库文档
+  resId     String
+  resName   String // 快照：资源名
+  projectId String?
+  ip        String? // x-forwarded-for 首段（Caddy 透传）
+  userAgent String?
+
+  @@index([projectId, createdAt])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
+// ========== 项目规则与已阅（docs/guard-prd.md F5） ==========
+
+// 项目规则：ADMIN 或项目负责人（ProjectMember.role=OWNER / project.ownerId）发布，多条按发布时间倒序。
+// 批复 9：改正文只更新 updatedAt，不清空已有已阅记录，也不做历史版本表。
+model ProjectRule {
+  id          String    @id @default(cuid())
+  projectId   String
+  title       String
+  content     String // Markdown 正文
+  createdById String
+  publishedAt DateTime  @default(now())
+  updatedAt   DateTime?
+
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User             @relation("RuleAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  acks      ProjectRuleAck[]
+
+  @@index([projectId, publishedAt])
+}
+
+// 已阅回执：成员手动点「我已阅」，可附一句说明；不可撤回（防止反复刷数据）
+model ProjectRuleAck {
+  id        String   @id @default(cuid())
+  ruleId    String
+  userId    String
+  note      String? // 可选的一句话说明
+  createdAt DateTime @default(now())
+
+  rule ProjectRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  user User        @relation("RuleAckUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, userId])
+  @@index([userId])
+}
+
+// ========== 项目复盘 ==========
+
+// 项目复盘轮次（负责人创建并设截止日；组员在截止日前完成提交）
+model ProjectRetro {
+  id        String    @id @default(cuid())
+  projectId String
+  kind      RetroKind
+  title     String // 如「项目一期复盘」
+  questions Json // 结构化 5 问固定默认；GENERAL 为空数组
+  deadline  DateTime? // 负责人设定的完成截止日期
+  createdById String // 创建人（项目负责人）
+  status    String    @default("OPEN") // OPEN / SUMMARIZED
+  summary   String? // AI 汇总报告（Markdown）
+  summaryBy String? // 执行汇总的负责人 userId
+  summarizedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  project     Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator     User                @relation("RetroCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  submissions RetroSubmission[]
+  sops        Sop[]
+
+  @@index([projectId, createdAt])
+}
+
+// 成员复盘提交（每人一轮一条，重复提交覆盖）
+model RetroSubmission {
+  id             String    @id @default(cuid())
+  retroId        String
+  userId         String
+  content        String? // 一般复盘粘贴文本
+  answers        Json? // 结构化 5 问 { q1..q5 }
+  attachmentName String? // 一般复盘上传文档名（文件存 MinIO）
+  attachmentKey  String?
+  submittedAt    DateTime  @default(now())
+
+  retro ProjectRetro @relation(fields: [retroId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([retroId, userId])
+}
+
+model KanbanBoard {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime @default(now())
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  columns KanbanColumn[]
+  tasks   Task[]
+}
+
+model KanbanColumn {
+  id        String  @id @default(cuid())
+  boardId   String
+  name      String
+  sortOrder Int     @default(0)
+  wipLimit  Int? // 列在制品上限，null 不限制
+
+  board KanbanBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  tasks Task[]
+
+  @@index([boardId])
+}
+
+model Task {
+  id           String       @id @default(cuid())
+  projectId    String
+  boardId      String? // 所属看板（可空，仅列表任务）
+  columnId     String? // 看板列
+  title        String
+  description  String?
+  status       TaskStatus   @default(TODO)
+  priority     TaskPriority @default(MEDIUM)
+  assigneeId   String?
+  creatorId    String
+  dueDate      DateTime?
+  startDate    DateTime? // 起始时间（任务表单/从进展创建任务设置，默认当天）
+  progress     Int          @default(0) // 完成百分比 0-100（可上下调整；每次调整需填写进展说明）
+  estimateHours Float?
+  sortOrder    Int          @default(0)
+  completedAt  DateTime?
+  lastRemindAt DateTime? // 逾期提醒：上次钉钉私聊提醒时间（每个逾期任务每个北京日最多提醒一次）
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  project    Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  board      KanbanBoard?    @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  column     KanbanColumn?   @relation(fields: [columnId], references: [id], onDelete: SetNull)
+  assignee   User?           @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creator    User            @relation("TaskCreator", fields: [creatorId], references: [id])
+  tags       TaskTag[]
+  comments   TaskComment[]
+  activities TaskActivity[]
+  attachments    Attachment[]
+  linkedUpdates ProjectUpdate[] // 由此任务关联的项目进展（从进展转任务后回链）
+  meetingItems   MeetingItem[] // 由会议待办落地而来的条目（会议纪要回链）
+
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([columnId])
+}
+
+model TaskTag {
+  id     String @id @default(cuid())
+  taskId String
+  name   String
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  authorId  String
+  content   String
+  createdAt DateTime @default(now())
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+// 任务变更流水（供 AI 日报/周报聚合）
+model TaskActivity {
+  id        String   @id @default(cuid())
+  taskId    String
+  userId    String
+  action    String // created / status_changed / assigned / commented / completed / updated
+  detail    Json? // 变更详情，如 { from: "TODO", to: "IN_PROGRESS" }
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// 附件（MinIO 存储，这里只存元数据）
+model Attachment {
+  id         String   @id @default(cuid())
+  taskId     String?
+  docId      String?
+  meetingId  String? // 会议/活动文档附件
+  uploaderId String
+  fileName   String
+  fileKey    String   @unique // MinIO object key
+  mimeType   String
+  size       Int
+  createdAt  DateTime @default(now())
+
+  uploader User        @relation(fields: [uploaderId], references: [id])
+  task     Task?       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  doc      KnowledgeDoc? @relation(fields: [docId], references: [id], onDelete: Cascade)
+  meeting  Meeting?     @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([docId])
+  @@index([meetingId])
+}
+
+// ========== 公告栏 ==========
+
+model Announcement {
+  id        String    @id @default(cuid())
+  title     String
+  content   String // Markdown
+  authorId  String
+  pinned    Boolean   @default(false)
+  expiresAt DateTime? // null 表示长期有效
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([pinned, createdAt])
+}
+
+// ========== 资讯中心 ==========
+
+model NewsSource {
+  id              String        @id @default(cuid())
+  name            String
+  url             String
+  type            NewsSourceType @default(TEAM)
+  ownerId         String? // 个人资讯源所有者；团队级为 null
+  isTeamWide      Boolean       @default(false) // 团队级源全员可见
+  enabled         Boolean       @default(true)
+  category        String? // 分类：行业/技术/竞品...
+  fetchIntervalMin Int          @default(60)
+  lastFetchedAt   DateTime?
+  createdAt       DateTime      @default(now())
+
+  owner User?           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  items NewsItem[]
+  subs  NewsSubscription[]
+
+  @@index([type, isTeamWide])
+}
+
+model NewsItem {
+  id          String        @id @default(cuid())
+  sourceId    String
+  title       String
+  url         String
+  content     String? // 正文（截断）
+  summary     String? // AI 摘要
+  tags        String[]      @default([])
+  publishedAt DateTime?
+  contentHash String        @unique // 去重
+  status      NewsItemStatus @default(FETCHED)
+  createdAt   DateTime      @default(now())
+
+  source NewsSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, status])
+  @@index([publishedAt])
+}
+
+// 个人订阅关系（团队级源对所有成员可见，无需订阅关系）
+model NewsSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  sourceId  String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source NewsSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceId])
+}
+
+// 组长（项目负责人）资讯展示规则：一段话，AI 据此从团队资讯中精选
+model ProjectNewsRule {
+  projectId String   @id
+  guideText String // 一段话描述团队关注方向
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// 个人资讯兴趣（一段话，AI 精选个人感兴趣的资讯）
+model UserNewsPref {
+  userId       String   @id
+  interestText String // 一段话描述兴趣方向
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ========== 消息落地（钉钉等外部消息源） ==========
+
+model MessageInbox {
+  id               String            @id @default(cuid())
+  source           String // dingtalk / wecom / feishu ...
+  msgId            String? @unique // 平台消息 ID（去重：SDK 重连可能重放消息）
+  conversationId   String? // 群 openConversationId
+  conversationName String?
+  senderExternalId String?
+  senderName       String?
+  messageType      InboxMessageType  @default(TEXT)
+  content          String? // 文本内容（图片/文件为描述）
+  raw              Json? // 原始消息
+  receivedAt       DateTime          @default(now())
+
+  @@index([source, conversationId])
+  @@index([receivedAt])
+}
+
+// ========== 日报 / 周报 ==========
+
+model Report {
+  id           String       @id @default(cuid())
+  type         ReportType
+  ownerId      String? // 归属人（null 表示团队聚合报告，如 AI 团队周报）
+  periodStart  DateTime // 周期开始
+  periodEnd    DateTime // 周期结束
+  content      Json? // 结构化正文 { sections: [...] }
+  aiGenerated  Json? // AI 生成的原始结果（保留，便于对比）
+  manualContent String? // 人工补充内容
+  rawContent   String? // 手写日报原文（同日提交追加合并）
+  correctedContent String? // AI 修正后的日报文本
+  projectId    String? // AI 判断或人工选择的所属项目（无法判断为 null；周报 P 归属时写入真实项目 id）
+  departmentId String? // 周报 D 归属：跨部门时选择发哪个部门的周报（仅标量，展示按 id 解析，无外键关系）
+  scopeKey     String @default("") // 归属判别串并参与唯一键：个人 "" / 项目 "P:{projectId}" / 部门 "D:{departmentId}"；日报一律 ""
+  hours        Float? // 当日工时（小时，0~24）：日报由 AI 从正文提取（如「今天干了 8 小时」），可在详情里人工修正；周报不采集
+  status       ReportStatus @default(DRAFT)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  owner   User?           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  project Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  updates ProjectUpdate[]
+  meetingMaterials MeetingMaterial[] // 被会议作为会前材料读取的快照来源
+
+  @@unique([type, ownerId, periodStart, scopeKey])
+  @@index([ownerId, type, createdAt])
+  @@index([type, periodStart]) // 每周工时排名按 (DAILY, 本周) 批量取数
+}
+
+// ========== 个人工作时间安排（工作计划页「我的工作时间安排」） ==========
+// 每人每周固定哪几天、哪几个时间段上班（周一~周日 × 预设时间段，可随时改）
+// 「应发日报人员」口径：当天（北京周几）有排班的人在提醒时间内未写日报才会被提醒
+model UserWorkSlot {
+  id        String   @id @default(cuid())
+  userId    String
+  weekday   Int // 0=周一 … 6=周日
+  startMin  Int // 开始时间（自北京时间 00:00 的分钟数，如 10:00=600）
+  endMin    Int // 结束时间（同上，如 12:00=720）
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekday, startMin, endMin])
+  @@index([userId, weekday])
+  @@index([weekday]) // 日报提醒按「今日周几」批量捞排班
+}
+
+// ========== PBC（个人业务承诺 / 月度计划） ==========
+// 每个成员按自然月填写「计划完成的事项 + 分值」，所有事项分值合计必须 = 100
+// month 存北京时间口径的 'YYYY-MM'；items: [{ content: string, score: number }]
+// 审批流：成员保存即置 SUBMITTED（待审批）→ 负责人/管理员审批置 APPROVED（锁定，成员不可改，除非撤回）
+//        负责人/管理员亦可「退回修改」置 REJECTED 并附修改意见，成员收到后修改并重新提交回到 SUBMITTED
+// 审批人：负责人本人的 PBC 由 ADMIN 审批；其余成员由其部门负责人审批（ADMIN 亦可审批全部）
+enum PbcStatus {
+  DRAFT // 空/未提交
+  SUBMITTED // 已提交待审批
+  APPROVED // 审批通过（锁定）
+  REJECTED // 已退回（附修改意见，成员可改后重新提交）
+}
+
+// PBC 考核状态轴（与计划审批 status 独立）：计划完成后成员自评→上级评分定稿
+enum PbcReviewStatus {
+  NOT_STARTED // 尚未自评
+  SELF_DONE // 成员已自评，待上级打分
+  LEADER_DONE // 上级已评分定稿（锁定）
+}
+
+model Pbc {
+  id           String    @id @default(cuid())
+  ownerId      String // 归属成员
+  month        String // 'YYYY-MM'（北京口径自然月）
+  items        Json // [{ content, score }]
+  total        Int       @default(0) // 冗余分值合计（服务层校验写入时必为 100）
+  status       PbcStatus @default(DRAFT) // 审批状态
+  approvedById String? // 审批人 userId（负责人/管理员），撤回时清空
+  approvedAt   DateTime? // 审批通过时间
+  reviewComment String? // 最近一次「退回修改」时审批人填写的修改意见（成员重新提交后清空）
+  reviewedById String? // 最近一次退回修改的审批人 userId
+  reviewedAt   DateTime? // 最近一次退回修改时间
+  decomposedAt DateTime? // 首次「确认创建任务」（PBC 分解为项目任务）的时间；列表据此标识已分解/未分解
+  // ---- 考核（自评→上级评分），与上方计划审批 status 是两个独立状态轴 ----
+  reviewStatus PbcReviewStatus @default(NOT_STARTED)
+  pbcLeaderId  String? // 负责打分的上级（默认=汇报树直属上级，成员提交自评时可调整）
+  selfSummary  String? // 整月自评总述
+  selfTotal    Int? // 自评合计得分（各条 selfScore 之和，满分 100）
+  selfAt       DateTime? // 自评提交时间
+  leaderTotal  Int? // 上级最终整月得分（各条 leaderScore 之和）
+  leaderComment String? // 上级整月总评
+  leaderAt     DateTime? // 上级评分定稿时间
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  owner     User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  pbcLeader User? @relation("PbcReviewer", fields: [pbcLeaderId], references: [id], onDelete: SetNull)
+
+  @@unique([ownerId, month])
+  @@index([month])
+}
+
+// PBC 考核动作留痕：目前只记「撤销定稿」（ADMIN 把已定稿打回待审核）。
+// 不改 Pbc 主表结构，独立记录谁在何时撤销了谁的哪个月；姓名存快照，人员删除后日志仍可读。
+model PbcReviewLog {
+  id          String   @id @default(cuid())
+  month       String // 'YYYY-MM'
+  ownerId     String // 被撤销的成员
+  ownerName   String // 快照
+  actorId     String // 操作人（ADMIN）
+  actorName   String // 快照
+  action      String // REVOKE_LEADER_REVIEW
+  fromStatus  String // 撤销前状态：LEADER_DONE
+  toStatus    String // 撤销后状态：SELF_DONE
+  leaderTotal Int? // 撤销时已被作废的最终得分
+  note        String? // 操作备注
+  createdAt   DateTime @default(now())
+
+  @@index([ownerId, month])
+  @@index([createdAt])
+}
+
+// ========== 知识库 ==========
+
+model KnowledgeCategory {
+  id        String   @id @default(cuid())
+  name      String
+  projectId String? // null 表示通用分类
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  project Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  docs    KnowledgeDoc[]
+
+  @@index([projectId])
+}
+
+model KnowledgeDoc {
+  id           String        @id @default(cuid())
+  categoryId   String?
+  projectId    String?
+  departmentId String? // 部门文档所属部门
+  title        String
+  content      String // Markdown 正文
+  visibility   DocVisibility @default(PUBLIC)
+  authorId     String
+  updatedById  String?
+  version      Int           @default(1)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  category KnowledgeCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  project Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  department Department?      @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  author  User                @relation("DocAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  updater User?               @relation("DocUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  versions KnowledgeVersion[]
+  attachments Attachment[]
+  shares    DocShare[]
+
+  @@index([categoryId])
+  @@index([projectId])
+  @@index([departmentId])
+  @@index([visibility])
+}
+
+// 个人文档授权（把查看/编辑权限授予指定成员）
+model DocShare {
+  id         String        @id @default(cuid())
+  docId      String
+  userId     String
+  permission DocPermission @default(VIEW)
+  createdAt  DateTime      @default(now())
+
+  doc  KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([docId, userId])
+  @@index([userId])
+}
+
+model KnowledgeVersion {
+  id        String   @id @default(cuid())
+  docId     String
+  version   Int
+  content   String
+  editorId  String
+  createdAt DateTime @default(now())
+
+  doc    KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  editor User         @relation(fields: [editorId], references: [id], onDelete: Cascade)
+
+  @@unique([docId, version])
+}
+
+// ========== 文档空间（部门/项目上传的二进制文件） ==========
+
+// 文件夹：归属于某个部门空间或项目空间，可嵌套
+model DocumentFolder {
+  id           String   @id @default(cuid())
+  name         String
+  departmentId String? // 部门空间
+  projectId    String? // 项目空间
+  parentId     String? // 上级文件夹
+  creatorId    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department?     @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  project    Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent     DocumentFolder? @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   DocumentFolder[] @relation("FolderTree")
+  creator    User            @relation("FolderCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  files      DocumentFile[]
+
+  @@index([departmentId])
+  @@index([projectId])
+  @@index([parentId])
+}
+
+// 上传的文件（docx/pptx/xlsx/pdf/jpg/mp4/stl/zip/rar 等），内容存 MinIO，这里存元数据
+model DocumentFile {
+  id           String         @id @default(cuid())
+  name         String // 展示文件名（含扩展名）
+  fileKey      String // 当前版本的 MinIO object key
+  mimeType     String
+  size         Int // 字节
+  folderId     String?
+  departmentId String? // 部门空间
+  projectId    String? // 项目空间
+  uploaderId   String
+  note         String? // 备注信息
+  visibility   FileVisibility @default(PRIVATE)
+  approval     FileApproval   @default(NONE) // 仅 PUBLIC 需要审批
+  externalPassword String? //  「对外部可见」访问密码（bcrypt hash；离开 EXTERNAL 时清空）
+  externalExpiresAt DateTime? //  「对外部可见」分享到期时间（超过则分享自动失效；离开 EXTERNAL 时清空）
+  reviewNote   String? // 审批意见
+  reviewedById String?
+  reviewedAt   DateTime?
+  version      Int            @default(1) // 当前版本号
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  folder     DocumentFolder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  department Department?     @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  project    Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploader   User            @relation("FileUploader", fields: [uploaderId], references: [id], onDelete: Cascade)
+  reviewedBy User?           @relation("FileReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  versions   DocumentFileVersion[]
+
+  @@index([departmentId])
+  @@index([projectId])
+  @@index([folderId])
+  @@index([approval])
+  @@index([createdAt])
+}
+
+// 文件历史版本（重名上传选“保留版本”时写入）
+model DocumentFileVersion {
+  id         String   @id @default(cuid())
+  fileId     String
+  version    Int
+  fileKey    String
+  mimeType   String
+  size       Int
+  note       String? // 版本说明
+  uploaderId String
+  createdAt  DateTime @default(now())
+
+  file     DocumentFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  uploader User         @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, version])
+  @@index([fileId])
+}
+
+// ========== SOP（标准经验库） ==========
+
+// 从复盘内容 AI 提取的经验/规律，人工确认后生效并打标签分类
+model Sop {
+  id           String        @id @default(cuid())
+  title        String
+  content      String // 经验/规律正文（Markdown）
+  tags         String[]      @default([])
+  status       SopStatus     @default(CANDIDATE)
+  sourceType   SopSourceType @default(RETRO_EXTRACT)
+  retroId      String? // 来源复盘
+  projectId    String? // 来源项目
+  proposerId   String // 提出人（触发提取的负责人/管理员）
+  confirmedById String? // 确认人
+  confirmedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  retro    ProjectRetro? @relation(fields: [retroId], references: [id], onDelete: SetNull)
+  project  Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  proposer User          @relation("SopProposer", fields: [proposerId], references: [id], onDelete: Cascade)
+  confirmedBy User?      @relation("SopConfirmer", fields: [confirmedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([projectId])
+}
+
+// ========== 灵感 / 需求 ==========
+
+// 首页录入框或灵感页新增的灵感/需求；可被 AI 规划转为项目/任务（CONVERTED）
+model Idea {
+  id        String     @id @default(cuid())
+  content   String // 灵感/需求正文
+  authorId  String // 作者
+  projectId String? // 关联项目（转为项目/任务后回写）
+  source    String // HOME_INTAKE 首页录入 / MANUAL 灵感页手动
+  status    IdeaStatus @default(NEW)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([authorId])
+  @@index([projectId])
+  @@index([status])
+}
+
+// ========== 资源预约 ==========
+
+model Resource {
+  id          String   @id @default(cuid())
+  name        String
+  type        String // meeting_room / device / vehicle / seat / other
+  location    String?
+  capacity    Int?
+  description String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  bookings ResourceBooking[]
+
+  @@index([type])
+}
+
+model ResourceBooking {
+  id           String        @id @default(cuid())
+  resourceId   String
+  bookerId     String
+  title        String
+  purpose      String?
+  startAt      DateTime
+  endAt        DateTime
+  participants String[] // 参与人姓名（轻量，不强制建账号）
+  status       BookingStatus @default(PENDING)
+  cancelReason String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  booker   User     @relation(fields: [bookerId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId, startAt, endAt])
+  @@index([bookerId])
+}
+
+// ========== 通知中心 ==========
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  content   String?
+  link      String? // 前端路由，如 /tasks/xxx
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([createdAt])
+}
+
+// ========== 管理者 Agent 会话历史 ==========
+
+// 悬浮窗「项目助理」的多轮对话按会话保存在服务端（跨设备/刷新可查看与继续）；
+// messages 存前端消息模型序列化数组（含工具痕迹 trace 与动作确认态 decided/resultLabel），title 取首条用户问句
+model AgentSession {
+  id           String   @id @default(cuid())
+  userId       String
+  title        String   @default("新会话")
+  messages     Json     @default("[]")
+  messageCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+}
+
+// 团队级配置（KV）
+model Setting {
+  key   String @id
+  value Json
+}
+
+// ========== 大模型调用记录 ==========
+
+// 每次实际调用大模型（DeepSeek）落一条，管理后台「大模型调用」页按天查看
+// 时间口径：createdAt 存【北京墙钟字面量】（写入时显式赋值，与 MessageInbox.receivedAt 相同），
+// 按天查询/展示均无需时区换算；同名 prompt 的重试会各记一条（attempt 区分）
+model AiCallLog {
+  id               String   @id @default(cuid())
+  createdAt        DateTime // 调用时间（北京墙钟字面量）
+  promptName       String // 提示词名（如 project.progress）
+  description      String? // 调用缘由：提示词「# 功能说明」
+  caller           String? // 调用来源（类.方法，由调用栈推断）
+  model            String // 实际请求的模型
+  attempt          Int      @default(1) // 第几次尝试（同一 prompt 最多 3 次）
+  status           String // SUCCESS / TRUNCATED / EMPTY / ERROR
+  durationMs       Int? // 本次 HTTP 请求耗时（毫秒）
+  promptText       String // 完整输入提示词（messages 按角色拼接）
+  response         String? // 大模型返回内容（正文；截断时可能为 reasoning 兜底提取）
+  finishReason     String? // stop / length / ...
+  promptTokens     Int?
+  completionTokens Int?
+  error            String? // 失败原因（HTTP 错误/异常信息，截断 500 字）
+
+  @@index([createdAt])
+}
+
+// ========== 会议管理（事前-事中-事后闭环） ==========
+// 设计原则：根源是会议纪要，执行是每一个任务。
+//   会议只拥有「会议/材料/点评/条目/纪要」；执行落到已有 Task，通知落到已有钉钉通道，材料落到已有 Report。
+// 时间口径：沿用全库约定，startAt/endAt/dueDate 等写入时按【北京墙钟字面量】显式存值（同 AiCallLog.createdAt），
+//   展示与比较均不做时区换算；slot.time 存 'HH:mm' 字符串（同 Department.reportRemindTime）。
+// status: DRAFT 草稿 / SCHEDULED 已安排 / IN_PROGRESS 进行中 / MINUTING 纪要整理中 / DONE 已完成 / CANCELLED 已取消
+// scope:  DEPT 部门周会 / COMPANY 公司 leader 周会 / PROJECT 项目会议 / PERSONAL 临时-小组会议
+// 幂等：自动生成的会议写 autoKey（'slot:{slotId}:{isoWeek}' 或 'company:{slotName}:{isoWeek}'），
+//   手动创建的会议 autoKey=null（PostgreSQL 唯一索引允许多个 NULL，因此天然不冲突）。
+
+model Meeting {
+  id          String   @id @default(cuid())
+  title       String
+  scope       String   @default("PERSONAL") // DEPT/COMPANY/PROJECT/PERSONAL/ACTIVITY（活动也是一种层级）
+  type        String   @default("WEEKLY") // WEEKLY 周会 / DAILY 日会站会 / PROJECT 项目会 / REVIEW 评审会 / ACTIVITY 活动 / OTHER
+  importance  String   @default("MEDIUM") // 重要性：HIGH 高 / MEDIUM 中 / LOW 低（活跃度权重依次 3/2/1）
+  agenda      String // 会议内容/议题（多行）
+  ownerId     String // 发起人/主持人
+  deptId      String? // scope=DEPT 时的部门（COMPANY 为 null）
+  projectId   String? // 主关联项目（条目落地任务的默认归属）
+  slotId      String? // 来源周会周期位（自动生成时写入）
+  autoCreated Boolean  @default(false) // 是否由周期位自动生成
+  isoWeek     String? // '2026-W42'（北京口径 ISO 周）
+  autoKey     String?  @unique // 自动生成幂等键（手动创建为 null）
+  location    String?
+  startAt     DateTime
+  endAt       DateTime
+  status      String   @default("DRAFT")
+  // ---- 会前材料 ----
+  materialRequirement String? // 材料要求说明；null 表示不要求材料
+  materialType        String? // REPORT_WEEKLY / REPORT_DAILY / TEXT
+  reportPeriodStart   DateTime? // 读取周报的周期起点（该周周一 00:00）
+  materialDeadline    DateTime? // 材料提交截止，默认 = startAt
+  participantIds String[] @default([]) // 参会人 userId（含主持人）；仅用于算缺交名单，「我的会议」查询走 MeetingMaterial
+  // ---- 钉钉通知 ----
+  notifyMode            String @default("BOTH") // BOTH 群发+私发 / GROUP 只群发 / DM 只私发（发起时可选，默认保持历史行为）
+  groupConversationId String? // 钉钉群 openConversationId（群发走 dws，同项目日报摘要）
+  groupName           String?
+  extraProjectIds     String[] @default([]) // 其他关联项目（条目落地任务候选项目）
+  remindEnabled           Boolean @default(true)
+  remindBeforeMinutes     Int     @default(0) // 开始提醒提前量
+  remindAt                DateTime? // 算好的提醒时刻（queue 扫描用）
+  startNotifiedAt         DateTime? // 开始提醒已发（幂等）
+  groupNotifiedAt         DateTime? // 会议通知已发群（幂等）
+  minutesSentAt           DateTime? // 纪要已发群（幂等）
+  draftNudgeSentAt        DateTime? // 草稿未发布的二次提醒（每周期位每 ISO 周 1 次）
+  wrapUpNotifiedAt        DateTime? // 会后引导主持人整理纪要已发
+  // ---- 纪要 ----
+  minutesWriterId String? // 纪要撰写人（默认为主持人 ownerId；未写满则在结束后 1 小时提醒此人）
+  minutes         String? // AI 生成并人工确认的整体纪要正文
+  minutesEditedAt DateTime?
+  // ---- 会议/活动文档（在线文字记录 + 附件，见 Attachment.meetingId）----
+  docText        String?
+  docUpdatedAt   DateTime?
+  docUpdatedById String?
+  // ---- 活动互动（对外链接 / 答题加分 / 助教 / 自主分组）----
+  publicToken   String?  @unique // 对外开放链接 token：生成后陌生人免登录可看活动与得分
+  publicPassword String? // 活动访问密码（bcrypt hash）：设置后对外页需先输密码；空 = 直接访问
+  assistantIds  String[] @default([]) // 助教 userId：由发起人任命，可审核加分与管理活动
+  quizQuestion  String? // 答题加分题目（对外链接可见）
+  quizAnswer    String? // 答题加分标准答案（仅内部接口返回）
+  quizPoints    Int      @default(2) // 答对一次加多少分（审批通过后计入）
+  cancelledReason String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  owner      User                   @relation("MeetingOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  minutesWriter User?              @relation("MeetingMinutesWriter", fields: [minutesWriterId], references: [id], onDelete: SetNull)
+  docUpdatedBy  User?               @relation("MeetingDocEditor", fields: [docUpdatedById], references: [id], onDelete: SetNull)
+  department Department?            @relation("DeptMeetings", fields: [deptId], references: [id], onDelete: SetNull)
+  project    Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  slot       DepartmentMeetingSlot? @relation("SlotMeetings", fields: [slotId], references: [id], onDelete: SetNull)
+  materials  MeetingMaterial[]
+  reviews    MeetingReview[]
+  items      MeetingItem[]
+  attendances MeetingAttendance[] // 考勤（自主签到 / 补签）
+  praises     MeetingPraise[]     // 会中表现点赞
+  attachments Attachment[]        // 会议/活动文档附件
+  guests      MeetingGuest[]      // 陌生人（扫码）签到名单
+  scores      MeetingScore[]      // 加分记录（组织者加分 / 答题自助申请，含审批状态）
+  groups      MeetingGroup[]      // 现场座位相邻自主分组
+
+  @@index([status, startAt])
+  @@index([ownerId])
+  @@index([startAt])
+  @@index([scope, deptId, isoWeek])
+  @@index([deletedAt, status])
+}
+
+// 会前材料（一人一份，快照存储：不跟随后续周报修改，可显式「重新读取」刷新）
+model MeetingMaterial {
+  id            String    @id @default(cuid())
+  meetingId     String
+  userId        String // 提交人/归属人
+  source        String    @default("REPORT") // REPORT 读取周报 / MANUAL 手写提交 / DOC 知识库引用（P2）
+  reportId      String? // 来源周报/日报
+  title         String?
+  rawContent    String? // 读取/提交时的原文快照（永久保留）
+  editedContent String? // 会中修改后的正文（有值则展示此值 + 「已修改」标记）
+  correctedContent String? // AI 润色结果（不覆盖 editedContent）
+  status        String    @default("PENDING") // PENDING 未提交 / SUBMITTED 已就绪 / MISSING 读取不到周报
+  submittedAt   DateTime?
+  refreshedAt   DateTime? // 最近一次重新读取周报
+  lastRemindAt  DateTime? // 缺交催办频控（每人每会议每个北京日最多 1 次）
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  meeting  Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user     User            @relation("MaterialOwner", fields: [userId], references: [id], onDelete: Cascade)
+  report   Report?         @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  reviews  MeetingReview[]
+  items    MeetingItem[]
+
+  @@unique([meetingId, userId])
+  @@index([meetingId, status])
+}
+
+// 材料点评（主持人/管理员针对某人材料写的意见，独立留痕，不覆盖原文）
+model MeetingReview {
+  id         String   @id @default(cuid())
+  meetingId  String
+  materialId String
+  reviewerId String // 点评人（主持人/管理员）
+  content    String
+  createdAt  DateTime @default(now())
+
+  meeting  Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  material MeetingMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  reviewer User            @relation("MeetingReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+
+  @@index([materialId, createdAt])
+  @@index([meetingId])
+}
+
+// 会议条目：待办 / 风险 / 会后待处理（确认后落地为 Task，taskId 回链）
+model MeetingItem {
+  id         String    @id @default(cuid())
+  meetingId  String
+  kind       String    @default("TODO") // TODO 待办 / RISK 风险 / PENDING 会后待处理
+  title      String // 内容描述
+  detail     String?
+  assigneeId String? // 责任人（RISK 为关注人，可空）
+  dueDate    DateTime? // 完成时间节点 / 复核时间
+  priority   String? // LOW/MEDIUM/HIGH/URGENT（落地任务时用）
+  sourceMaterialId String? // 来源材料（回溯到某人的讨论段）
+  source     String    @default("MANUAL") // MANUAL 人工录入 / AI 生成
+  confirmed  Boolean   @default(false) // 是否已落地为任务
+  taskId     String?   // 落地任务回链（任务被删则置空，条目仍留痕）
+  createdRound Int     @default(0) // 录入轮次：0=会中，1=会后补录
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  meeting  Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  assignee User?            @relation("MeetingItemAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  task     Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  material MeetingMaterial? @relation(fields: [sourceMaterialId], references: [id], onDelete: SetNull)
+
+  @@index([meetingId, kind])
+  @@index([assigneeId, confirmed])
+  @@index([taskId])
+}
+
+// 部门周会周期位：一个部门可配多场（如「周三 15:00 技术周会」+「周四 16:00 复盘会」）
+// 公司 leader 周会不入本表（不属于任何部门），存 Setting('meeting.company.leader') 的同构 slots 数组
+// autoPilot 冷启动：默认 false —— 首场自动建为 DRAFT 并只私聊部门负责人「待发布」；
+//   负责人亲自点发布后置 true（只能由人工点发布或手动拨开关提升，定时任务不自己提升），以后自动直接发群
+model DepartmentMeetingSlot {
+  id                  String   @id @default(cuid())
+  departmentId        String
+  name                String   @default("周会") // 用于会议标题后缀
+  weekday             Int // 1=周一 … 7=周日
+  time                String   @default("15:00") // 北京时间 HH:mm
+  durationMinutes     Int      @default(60)
+  autoCreate          Boolean  @default(true) // 关闭则仅手动创建
+  createAheadDays     Int      @default(3) // 提前几天创建
+  materialType        String?  @default("REPORT_WEEKLY") // REPORT_WEEKLY/REPORT_DAILY/TEXT/null
+  groupConversationId String?
+  groupName           String?
+  remindEnabled       Boolean  @default(true)
+  remindBeforeMinutes Int      @default(0)
+  autoPilot           Boolean  @default(false)
+  enabled             Boolean  @default(true) // 暂停而不删配置
+  lastAutoWeek        String? // 上次已处理生成的 ISO 周（每日 tick 快速跳过）
+  sortOrder           Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  meetings   Meeting[]  @relation("SlotMeetings")
+
+  @@index([departmentId, weekday])
+  @@index([enabled, autoCreate])
+}
+
+// 会议/活动考勤：会议开始至开始后 1 小时内可自主签到；过后需发起人/管理员/部门主管补签（必须写理由）
+model MeetingAttendance {
+  id         String   @id @default(cuid())
+  meetingId  String
+  userId     String
+  method     String   @default("SELF") // SELF 自主签到 / MAKEUP 补签
+  reason     String? // 补签理由（method=MAKEUP 必填）
+  operatorId String? // 补签操作人；自主签到为空
+  checkedAt  DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  meeting  Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user     User    @relation("AttendanceUser", fields: [userId], references: [id], onDelete: Cascade)
+  operator User?   @relation("AttendanceOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@unique([meetingId, userId])
+  @@index([userId, checkedAt])
+  @@index([meetingId])
+}
+
+// 会中表现点赞：会议发起人或管理员可点赞并填写理由（可选），同一人对同一人一场一次
+model MeetingPraise {
+  id        String   @id @default(cuid())
+  meetingId String
+  userId    String
+  praiserId String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation("PraiseTarget", fields: [userId], references: [id], onDelete: Cascade)
+  praiser User    @relation("PraiseAuthor", fields: [praiserId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId, praiserId])
+  @@index([meetingId])
+  @@index([userId])
+}
+
+// 陌生人（扫码）签到：不用登录，只留姓名 + 手机号；同一场同一手机号唯一
+model MeetingGuest {
+  id        String   @id @default(cuid())
+  meetingId String
+  name      String
+  phone     String
+  // 扫码签到时二选一填写的性别：MALE / FEMALE，null = 没填（老数据、内部注册用户）
+  gender    String?
+  // 关联的注册用户：扫码填写的姓名 + 手机号与注册用户完全一致时落此列，
+  // 这场活动的参加记录（考勤/名册/得分）都归到该注册用户名下
+  userId    String?
+  createdAt DateTime @default(now())
+
+  meeting Meeting              @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?                @relation("MeetingGuestUser", fields: [userId], references: [id], onDelete: SetNull)
+  scores  MeetingScore[]
+  groups  MeetingGroup[]
+  groupMemberships MeetingGroupMember[]
+
+  @@unique([meetingId, phone])
+  @@index([meetingId])
+  @@index([userId])
+}
+
+// 活动加分：组织者/助教直接加分（APPROVED），或答题自助申请（PENDING 待审批）
+// 对象二选一：内部成员 userId / 陌生人 guestId
+model MeetingScore {
+  id         String   @id @default(cuid())
+  meetingId  String
+  userId     String?
+  guestId    String?
+  points     Int      @default(1)
+  reason     String?
+  source     String   @default("MANUAL") // MANUAL 人工加分 / QUIZ 答题自助申请
+  status     String   @default("APPROVED") // PENDING 待审批 / APPROVED 已通过 / REJECTED 已驳回
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  meeting   Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user      User?         @relation("MeetingScoreTarget", fields: [userId], references: [id], onDelete: Cascade)
+  guest     MeetingGuest? @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  createdBy  User?        @relation("MeetingScoreCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy User?        @relation("MeetingScoreApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([meetingId, status])
+  @@index([userId])
+  @@index([guestId])
+}
+
+// 现场自主分组（座位相邻的人自己抱团）：组名由建组人起，组长由组内选出
+model MeetingGroup {
+  id            String   @id @default(cuid())
+  meetingId     String
+  name          String
+  leaderId      String?
+  leaderGuestId String?
+  createdById   String?
+  // 会场座位图坐标：拖动小组时落库，-1 表示还没摆到座位图上（前端自动补位）
+  seatRow       Int      @default(-1)
+  seatCol       Int      @default(-1)
+  createdAt     DateTime @default(now())
+
+  meeting     Meeting             @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  leader      User?               @relation("MeetingGroupLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  leaderGuest MeetingGuest?       @relation(fields: [leaderGuestId], references: [id], onDelete: SetNull)
+  members     MeetingGroupMember[]
+  creator     User?               @relation("MeetingGroupCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([meetingId, name])
+  @@index([meetingId])
+}
+
+model MeetingGroupMember {
+  id       String   @id @default(cuid())
+  groupId  String
+  userId   String?
+  guestId  String?
+  joinedAt DateTime @default(now())
+
+  group MeetingGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User?         @relation("MeetingGroupMember", fields: [userId], references: [id], onDelete: Cascade)
+  guest MeetingGuest? @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@unique([groupId, guestId])
+  @@index([groupId])
+  @@index([userId])
+}
+
+// ========== 项目资源盘点（仅管理员维护的服务知识台账） ==========
+
+// 服务器台账：沉淀公司现有服务器 IP、云厂商归属、配置与负责人
+model InventoryServer {
+  id        String    @id @default(cuid())
+  ip        String // 服务器 IP
+  label     String? // 别名/用途标注（如“生产主服务器”）
+  provider  String // 云厂商/归属：腾讯云 / 阿里云 / 华为云 / 自建...
+  region    String? // 地域
+  spec      String? // 配置（CPU/内存/带宽）
+  usage     String? // 用途说明
+  expireAt  DateTime? // 到期时间
+  ownerId   String? // 负责人（关联内部 User）
+  creatorId String? // 创建人（上传该条记录的用户；非管理员仅可见自己创建的）
+  remark    String? // 备注
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  owner        User?                   @relation("InventoryServerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  creator      User?                   @relation("InventoryServerCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  projects     InventoryProjectServer[] // 被哪些盘点项目使用
+  domains      InventoryDomainServer[]  // 被哪些域名解析/关联
+
+  @@index([ip])
+  @@index([ownerId])
+  @@index([creatorId])
+}
+
+// 域名台账：沉淀公司现有域名、性质（个人/企业）、注册商、备案与负责人
+model InventoryDomain {
+  id        String       @id @default(cuid())
+  domain    String // 域名
+  nature    DomainNature @default(ENTERPRISE) // 个人 / 企业
+  registrar String? // 注册商（万网/腾讯云/阿里云...）
+  filing    String? // ICP 备案号
+  expireAt  DateTime? // 到期时间
+  ownerId   String? // 负责人
+  creatorId String? // 创建人（上传该条记录的用户；非管理员仅可见自己创建的）
+  remark    String? // 备注
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  owner    User?                   @relation("InventoryDomainOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  creator  User?                   @relation("InventoryDomainCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  projects InventoryProjectDomain[] // 被哪些盘点项目使用
+  servers  InventoryDomainServer[]  // 域名解析/关联到哪些服务器
+
+  @@index([domain])
+  @@index([ownerId])
+  @@index([creatorId])
+}
+
+// 项目盘点条目：一个项目的形态/网址/小程序/GitHub/负责人，并关联所用服务器与域名
+model ProjectInventory {
+  id              String   @id @default(cuid())
+  title           String // 盘点条目名称（项目名）
+  projectId       String? // 关联已有项目（可空，用于历史项目/手动新增）
+  forms           String[] // 当前形态多选：WEB/APP/MINIPROGRAM/BACKEND/OTHER
+  websiteUrl      String? // 项目网址（便于打开）
+  hasMiniProgram  Boolean  @default(false) // 是否有小程序
+  miniProgramName String? // 小程序名称
+  githubUrl       String? // GitHub 链接
+  githubAccount   String? // GitHub 账号
+  admin           String? // 目前的管理员（自由文本：姓名 / 账号 / 联系方式，可与负责人不同）
+  ownerId         String? // 项目负责人
+  creatorId       String? // 创建人（上传该条目的用户；非管理员仅可见自己创建的）
+  remark          String? // 备注
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  owner   User?                   @relation("InventoryOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  creator User?                   @relation("InventoryCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  servers InventoryProjectServer[] // 本项目使用的服务器
+  domains InventoryProjectDomain[] // 本项目使用的域名
+
+  @@index([projectId])
+  @@index([ownerId])
+  @@index([creatorId])
+}
+
+// 项目盘点 ↔ 服务器 多对多
+model InventoryProjectServer {
+  id          String @id @default(cuid())
+  inventoryId String
+  serverId    String
+
+  inventory ProjectInventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  server    InventoryServer  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([inventoryId, serverId])
+  @@index([serverId])
+}
+
+// 项目盘点 ↔ 域名 多对多
+model InventoryProjectDomain {
+  id          String @id @default(cuid())
+  inventoryId String
+  domainId    String
+
+  inventory ProjectInventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  domain    InventoryDomain  @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([inventoryId, domainId])
+  @@index([domainId])
+}
+
+// 域名 ↔ 服务器 多对多（域名解析/关联到哪台服务器，纯服务知识关联）
+model InventoryDomainServer {
+  id       String @id @default(cuid())
+  domainId String
+  serverId String
+
+  domain InventoryDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  server InventoryServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, serverId])
+  @@index([serverId])
+}
+
+// 使用体验反馈：首页顶部「反馈」入口全员可提交，落库后自动同步到公司全员大群；管理后台「用户反馈」面板按状态管理并可让 AI 总结
+model Feedback {
+  id          String         @id @default(cuid())
+  userId      String // 提交人
+  content     String // 反馈正文（1..2000 字）
+  status      FeedbackStatus @default(PENDING)
+  handledById String? // 受理人（管理员 id，仅记录不做外键）
+  handledAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
