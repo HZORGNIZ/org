@@ -36,6 +36,7 @@ export class InventoryController {
     @CurrentUser() user: CurrentUserPayload,
     @Body()
     body: {
+      name?: string;
       ip: string;
       label?: string;
       provider: string;
@@ -56,6 +57,7 @@ export class InventoryController {
     @Param('id') id: string,
     @Body()
     body: Partial<{
+      name: string;
       ip: string;
       label: string;
       provider: string;

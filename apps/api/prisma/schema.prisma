@@ -1638,6 +1638,7 @@ model MeetingGroupMember {
 // 服务器台账：沉淀公司现有服务器 IP、云厂商归属、配置与负责人
 model InventoryServer {
   id        String    @id @default(cuid())
+  name      String? // 约定名称（如“考公服务器”“宣誓爱服务器”），台账首列展示
   ip        String // 服务器 IP
   label     String? // 别名/用途标注（如“生产主服务器”）
   provider  String // 云厂商/归属：腾讯云 / 阿里云 / 华为云 / 自建...

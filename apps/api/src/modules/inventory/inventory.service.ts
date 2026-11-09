@@ -65,6 +65,7 @@ export class InventoryService {
   createServer(
     actor: CurrentUserPayload,
     data: {
+      name?: string;
       ip: string;
       label?: string;
       provider: string;
@@ -107,7 +108,7 @@ export class InventoryService {
       include: {
         owner: { select: userSelect },
         creator: { select: userSelect },
-        servers: { include: { server: { select: { id: true, ip: true, label: true, provider: true } } } },
+        servers: { include: { server: { select: { id: true, name: true, ip: true, label: true, provider: true } } } },
         _count: { select: { projects: true } },
       },
       orderBy: { createdAt: 'asc' },
@@ -233,7 +234,7 @@ export class InventoryService {
         project: { select: { id: true, name: true } },
         owner: { select: userSelect },
         creator: { select: userSelect },
-        servers: { include: { server: { select: { id: true, ip: true, label: true, provider: true } } } },
+        servers: { include: { server: { select: { id: true, name: true, ip: true, label: true, provider: true } } } },
         domains: { include: { domain: { select: { id: true, domain: true, nature: true } } } },
       },
       orderBy: { createdAt: 'desc' },
@@ -415,6 +416,7 @@ export class InventoryService {
 
   /** 规整服务器入参：日期转 Date、空字符串负责人转 null */
   private trimServer(data: {
+    name?: string;
     ip?: string;
     label?: string;
     provider?: string;
@@ -426,6 +428,7 @@ export class InventoryService {
     remark?: string;
   }): Prisma.InventoryServerUncheckedCreateInput & Record<string, any> {
     const out: Record<string, any> = {};
+    if (data.name !== undefined) out.name = data.name;
     if (data.ip !== undefined) out.ip = data.ip;
     if (data.label !== undefined) out.label = data.label;
     if (data.provider !== undefined) out.provider = data.provider;

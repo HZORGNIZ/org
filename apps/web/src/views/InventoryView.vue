@@ -82,7 +82,7 @@
               <div class="rel-line">
                 <span class="rel-k">服务器</span>
                 <span v-if="!row.servers?.length" class="muted small">未关联</span>
-                <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.ip }}</el-tag>
+                <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.name || s.server.ip }}</el-tag>
               </div>
               <div class="rel-line">
                 <span class="rel-k">域名</span>
@@ -143,7 +143,7 @@
           <el-table-column label="所用服务器" min-width="150">
             <template #default="{ row }">
               <span v-if="!row.servers?.length" class="muted">-</span>
-              <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.ip }}</el-tag>
+              <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.name || s.server.ip }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="所用域名" min-width="150">
@@ -173,12 +173,18 @@
       <!-- ================= 服务器台账 ================= -->
       <el-tab-pane label="服务器台账" name="server">
         <div class="bar">
-          <span class="muted">共 {{ servers.length }} 台服务器（服务知识：IP / 云厂商 / 负责人）</span>
+          <span class="muted">共 {{ servers.length }} 台服务器（服务知识：名称 / IP / 云厂商 / 负责人）</span>
           <el-button type="primary" @click="openServer()">
             <el-icon><Plus /></el-icon>&nbsp;新增服务器
           </el-button>
         </div>
         <el-table v-loading="loading" :data="servers" class="tbl" empty-text="暂无服务器">
+          <el-table-column prop="name" label="名称" min-width="130">
+            <template #default="{ row }">
+              <span v-if="row.name" class="cell-strong">{{ row.name }}</span>
+              <span v-else class="muted">-</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="ip" label="IP" min-width="140" />
           <el-table-column prop="label" label="标注" min-width="130">
             <template #default="{ row }">{{ row.label || '-' }}</template>
@@ -254,7 +260,7 @@
           <el-table-column label="解析/关联服务器" min-width="160">
             <template #default="{ row }">
               <span v-if="!row.servers?.length" class="muted">-</span>
-              <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.ip }}</el-tag>
+              <el-tag v-for="s in row.servers" :key="s.id" size="small" effect="plain" class="tag">{{ s.server.name || s.server.ip }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="备注" min-width="160">
@@ -329,7 +335,7 @@
         </div>
         <el-form-item label="所用服务器">
           <el-select v-model="invForm.serverIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="从服务器台账选择" style="width: 100%">
-            <el-option v-for="s in servers" :key="s.id" :label="`${s.ip}${s.label ? ' · ' + s.label : ''}`" :value="s.id" />
+            <el-option v-for="s in servers" :key="s.id" :label="serverOptionLabel(s)" :value="s.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="所用域名">
@@ -351,38 +357,43 @@
     <el-dialog v-model="serverDialog" :title="editingServer ? '编辑服务器' : '新增服务器'" width="min(94vw, 560px)" align-center>
       <el-form label-position="top">
         <div class="row">
+          <el-form-item label="名称（约定名称）" class="half">
+            <el-input v-model="serverForm.name" placeholder="如：考公服务器" />
+          </el-form-item>
           <el-form-item label="服务器 IP" required class="half">
             <el-input v-model="serverForm.ip" placeholder="如：124.223.100.121" />
           </el-form-item>
+        </div>
+        <div class="row">
           <el-form-item label="标注" class="half">
             <el-input v-model="serverForm.label" placeholder="如：生产主服务器" />
           </el-form-item>
-        </div>
-        <div class="row">
           <el-form-item label="云厂商/归属" required class="half">
             <el-select v-model="serverForm.provider" filterable allow-create default-first-option placeholder="选择或输入" style="width: 100%">
               <el-option v-for="p in PROVIDER_OPTIONS" :key="p" :label="p" :value="p" />
             </el-select>
           </el-form-item>
+        </div>
+        <div class="row">
           <el-form-item label="地域" class="half">
             <el-input v-model="serverForm.region" placeholder="如：上海" />
           </el-form-item>
-        </div>
-        <div class="row">
           <el-form-item label="配置" class="half">
             <el-input v-model="serverForm.spec" placeholder="CPU/内存/带宽" />
           </el-form-item>
+        </div>
+        <div class="row">
           <el-form-item label="到期时间" class="half">
             <el-date-picker v-model="serverForm.expireAt" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="负责人" class="half">
+            <el-select v-model="serverForm.ownerId" clearable filterable placeholder="选择负责人" style="width: 100%">
+              <el-option v-for="u in users" :key="u.id" :label="u.name" :value="u.id" />
+            </el-select>
           </el-form-item>
         </div>
         <el-form-item label="用途">
           <el-input v-model="serverForm.usage" placeholder="承载哪些服务" />
-        </el-form-item>
-        <el-form-item label="负责人">
-          <el-select v-model="serverForm.ownerId" clearable filterable placeholder="选择负责人" style="width: 100%">
-            <el-option v-for="u in users" :key="u.id" :label="u.name" :value="u.id" />
-          </el-select>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="serverForm.remark" type="textarea" :rows="2" />
@@ -428,7 +439,7 @@
         </div>
         <el-form-item label="解析/关联服务器">
           <el-select v-model="domainForm.serverIds" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择该域名解析到的服务器" style="width: 100%">
-            <el-option v-for="s in servers" :key="s.id" :label="`${s.ip}${s.label ? ' · ' + s.label : ''}`" :value="s.id" />
+            <el-option v-for="s in servers" :key="s.id" :label="serverOptionLabel(s)" :value="s.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="备注">
@@ -489,7 +500,7 @@ const filteredInventories = computed(() => {
       hit(r.title) || hit(r.admin) || hit(r.owner?.name) || hit(r.remark) ||
       hit(r.websiteUrl) || hit(r.githubUrl) || hit(r.githubAccount) || hit(r.miniProgramName)
     ) return true;
-    if ((r.servers || []).some((s: any) => hit(s.server?.ip) || hit(s.server?.label) || hit(s.server?.provider))) return true;
+    if ((r.servers || []).some((s: any) => hit(s.server?.name) || hit(s.server?.ip) || hit(s.server?.label) || hit(s.server?.provider))) return true;
     if ((r.domains || []).some((d: any) => hit(d.domain?.domain))) return true;
     return false;
   });
@@ -509,6 +520,11 @@ function suggestAdmins(q: string, cb: (arr: { value: string }[]) => void) {
 }
 function withProto(u: string) {
   return /^https?:\/\//i.test(u) ? u : 'https://' + u;
+}
+/** 服务器在下拉/标签里的展示：名称优先，其次 IP，再带标注 */
+function serverOptionLabel(s: any) {
+  const base = s.name || s.ip;
+  return `${base}${s.ip && s.name ? ' · ' + s.ip : ''}${s.label ? ' · ' + s.label : ''}`;
 }
 
 async function loadAll() {
@@ -624,12 +640,12 @@ async function delInventory(row: any) {
 const serverDialog = ref(false);
 const editingServer = ref<any>(null);
 const serverForm = reactive<any>({
-  ip: '', label: '', provider: '腾讯云', region: '', spec: '', usage: '', expireAt: '', ownerId: null, remark: '',
+  name: '', ip: '', label: '', provider: '腾讯云', region: '', spec: '', usage: '', expireAt: '', ownerId: null, remark: '',
 });
 
 function resetServerForm() {
   Object.assign(serverForm, {
-    ip: '', label: '', provider: '腾讯云', region: '', spec: '', usage: '', expireAt: '', ownerId: null, remark: '',
+    name: '', ip: '', label: '', provider: '腾讯云', region: '', spec: '', usage: '', expireAt: '', ownerId: null, remark: '',
   });
 }
 
@@ -638,6 +654,7 @@ function openServer(row?: any) {
   resetServerForm();
   if (row) {
     Object.assign(serverForm, {
+      name: row.name || '',
       ip: row.ip,
       label: row.label || '',
       provider: row.provider || '腾讯云',
@@ -678,7 +695,7 @@ async function saveServer() {
 }
 
 async function delServer(row: any) {
-  await ElMessageBox.confirm(`确定删除服务器「${row.ip}」？其对项目/域名的关联将一并解除。`, '删除服务器', { type: 'warning' });
+  await ElMessageBox.confirm(`确定删除服务器「${row.name || row.ip}」？其对项目/域名的关联将一并解除。`, '删除服务器', { type: 'warning' });
   await inventoryApi.removeServer(row.id);
   ElMessage.success('已删除');
   await loadAll();
