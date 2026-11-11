@@ -274,6 +274,9 @@ export const reportsApi = {
   weeklyComposeOptions: () => api.get<any>('/reports/weekly-compose-options'),
   /** 我的工作时间安排（计划页周视图）：presets + slots + today 口径 */
   workSlots: () => api.get<any>('/reports/work-slots'),
+  /** 批量读取成员工作时间安排（项目详情页成员工作时间 TAB）：presets + users[] 只读 */
+  workSlotsBatch: (userIds: string[]) =>
+    api.get<any>(`/reports/work-slots/batch?userIds=${encodeURIComponent(userIds.join(','))}`),
   /** 保存我的工作时间安排（整表覆盖，weekday 0=周一…6=周日） */
   saveWorkSlots: (slots: { weekday: number; startMin: number; endMin: number }[]) =>
     api.put<any>('/reports/work-slots', { slots }),

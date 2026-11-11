@@ -102,6 +102,19 @@ export class ReportsController {
     return this.workSchedule.getMine(userId);
   }
 
+  /**
+   * 批量读取成员工作时间安排（项目详情页「成员工作时间」TAB 用，只读）。
+   * GET /reports/work-slots/batch?userIds=a,b,c
+   */
+  @Get('work-slots/batch')
+  getWorkSlotsBatch(@Query('userIds') userIds?: string) {
+    const ids = (userIds ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return this.workSchedule.getMany(ids);
+  }
+
   /** 保存我的工作时间安排（整表覆盖）：slots=[{ weekday 0=周一…6=周日, startMin, endMin }] */
   @Put('work-slots')
   saveWorkSlots(@CurrentUser('id') userId: string, @Body() body: { slots?: unknown }) {

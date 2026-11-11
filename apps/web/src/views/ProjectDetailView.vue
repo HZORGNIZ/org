@@ -359,6 +359,12 @@
       />
       </el-tab-pane>
 
+      <el-tab-pane name="worktime">
+        <template #label>成员工作时间</template>
+        <!-- 成员工作时间：本项目成员每周固定上班时段（只读；成员自己在「工作管理 → 我的工作时间」调整） -->
+        <ProjectMemberSchedulePanel :members="displayMembers" :owner="project?.owner" />
+      </el-tab-pane>
+
       <el-tab-pane name="tasks">
         <template #label>任务</template>
       <!-- 任务清单：项目下全部任务（含看板列与列表任务），点击行查看详情 -->
@@ -806,6 +812,7 @@ import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
 import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
 import ProjectDailyPanel from '../components/ProjectDailyPanel.vue';
 import ProjectSchedulePanel from '../components/ProjectSchedulePanel.vue';
+import ProjectMemberSchedulePanel from '../components/ProjectMemberSchedulePanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -813,7 +820,7 @@ const auth = useAuthStore();
 
 const project = ref<any>(null);
 // 重点板块改由 Tab 分组展示；Tab 状态写入 ?tab= 便于深链（首页/消息里的「项目日报」入口可直接跳到日报 Tab）
-const TAB_NAMES = ['overview', 'schedule', 'daily', 'tasks', 'meetings', 'weekly', 'docs'];
+const TAB_NAMES = ['overview', 'schedule', 'daily', 'worktime', 'tasks', 'meetings', 'weekly', 'docs'];
 const activeTab = computed({
   get: () => {
     const q = String(route.query.tab ?? '');

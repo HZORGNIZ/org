@@ -50,6 +50,48 @@ export class WorkScheduleService {
     return this.shape(rows);
   }
 
+  /**
+   * 批量读取若干成员的整周工作时间安排（项目详情页「成员工作时间」只读展示用）。
+   * 返回 { presets, weekdayLabels, todayWeekday, todayLabel, users:[{ userId, slots, totalSlots, totalHours, todaySlots, todayHours }] }
+   * - 顺序与传入 userIds 一致（前端二级 TAB 顺序不被打乱）
+   * - 没有任何排班的成员也会返回一条空记录，前端据此显示「未排班」
+   */
+  async getMany(userIds: string[]) {
+    const ids = [...new Set((userIds ?? []).filter(Boolean))].slice(0, 200);
+    const todayWeekday = this.bjWeekday();
+    const rows = ids.length
+      ? await this.prisma.userWorkSlot.findMany({
+          where: { userId: { in: ids } },
+          orderBy: [{ weekday: 'asc' }, { startMin: 'asc' }],
+          select: { userId: true, weekday: true, startMin: true, endMin: true },
+        })
+      : [];
+    const byUser = new Map<string, SlotRow[]>();
+    for (const r of rows) {
+      const list = byUser.get(r.userId) ?? [];
+      list.push({ weekday: r.weekday, startMin: r.startMin, endMin: r.endMin });
+      byUser.set(r.userId, list);
+    }
+    return {
+      todayWeekday,
+      todayLabel: weekdayLabel(todayWeekday),
+      weekdayLabels: WORK_WEEKDAY_LABELS,
+      presets: WORK_SLOT_PRESETS,
+      users: ids.map((userId) => {
+        const list = byUser.get(userId) ?? [];
+        const todaySlots = list.filter((r) => r.weekday === todayWeekday);
+        return {
+          userId,
+          slots: list,
+          totalSlots: list.length,
+          totalHours: slotsHours(list),
+          todaySlots,
+          todayHours: slotsHours(todaySlots),
+        };
+      }),
+    };
+  }
+
   /** 校验 + 去重：weekday 0~6、时间在一天内、结束晚于开始、同一天不重叠 */
   private normalize(slots: unknown): SlotRow[] {
     if (slots === undefined || slots === null) return [];
