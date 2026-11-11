@@ -7,22 +7,25 @@
       </el-button>
     </div>
 
-    <!-- 大 tab：日报 / 周报 / PBC / 日报看板 / 工时统计，点 tab 直达对应区块，不用整页往下翻 -->
+    <!-- 大 tab：日报 / 周报 / PBC / 日报看板 / 工时统计 / 我的工作时间，点 tab 直达对应区块，不用整页往下翻 -->
     <el-tabs v-model="tab" class="rm-tabs" @tab-change="onTabChange">
       <el-tab-pane label="日报" name="daily" />
       <el-tab-pane label="周报" name="weekly" />
       <el-tab-pane label="PBC 月计划" name="pbc" />
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
+      <el-tab-pane label="我的工作时间" name="schedule" />
     </el-tabs>
 
     <!-- 日报看板 / 工时统计：整宽面板，不需要右侧栏 -->
     <ReportsStatsPanel v-if="tab === 'board'" mode="board" />
     <ReportsStatsPanel v-else-if="tab === 'hours'" mode="hours" />
 
-    <!-- 日报 / 周报 / PBC：左列填写 + 历史文档，右列可收起的「我的工作时间安排」 -->
-    <div v-else class="rm-layout" :class="{ 'is-collapsed': asideCollapsed }">
-      <div class="rm-main">
+    <!-- 我的工作时间：整宽 TAB（原右栏卡片迁入，首页也复用同一组件） -->
+    <WorkSchedulePanel v-else-if="tab === 'schedule'" :show-manage-link="false" />
+
+    <!-- 日报 / 周报 / PBC：左侧填写 + 历史文档（原右栏工作时间已改为独立 TAB） -->
+    <div v-else>
 
     <!-- 写日报 / 生成周报 / PBC 填写区 -->
     <div class="page-card">
@@ -608,78 +611,7 @@
       </el-table>
       <div v-if="!pbcTeam.length && !pbcTeamLoading" class="muted empty">暂无可查看的团队成员</div>
     </div>
-      </div><!-- /rm-main -->
-
-      <!-- 右栏（可收起）：我的工作时间安排 —— 周一~周日 × 预设时间段，当天排了班才会被日报提醒 -->
-      <aside class="rm-aside">
-        <button v-if="asideCollapsed" type="button" class="rm-rail" title="展开「我的工作时间安排」" @click="toggleAside">
-          <span class="rm-rail-txt">我的工作时间安排</span>
-          <span class="rm-rail-dot" :class="{ on: workPlanSummary.todaySlots > 0 }"></span>
-        </button>
-        <div v-else class="page-card rm-wp">
-          <div class="wp-head">
-            <div class="wp-title">
-              我的工作时间安排
-              <span class="muted wp-sub">勾选每周固定上班的时间段；只有当天排了班，系统才会在提醒时间把你当「应发日报人员」催日报。</span>
-            </div>
-            <div class="wp-actions">
-              <el-button size="small" text @click="toggleAside">收起</el-button>
-              <el-button size="small" :disabled="!workPlanDirty || workPlanSaving" @click="resetWorkPlan">还原</el-button>
-              <el-button size="small" type="primary" :loading="workPlanSaving" :disabled="!workPlanDirty" @click="saveWorkPlan">
-                保存安排
-              </el-button>
-            </div>
-          </div>
-
-          <div class="wp-meta">
-            <el-tag size="small" type="success" effect="plain">
-              本周 {{ workPlanSummary.weekSlots }} 段 · {{ workPlanSummary.weekHours }} 小时
-            </el-tag>
-            <el-tag size="small" :type="workPlanSummary.todaySlots ? 'primary' : 'info'" effect="plain">
-              今天（{{ workPlanTodayLabel || '—' }}）
-              {{ workPlanSummary.todaySlots ? `${workPlanSummary.todaySlots} 段 · ${workPlanSummary.todayHours} 小时` : '未排班，今天不会收到日报提醒' }}
-            </el-tag>
-            <el-tag v-if="workPlanDirty" size="small" type="warning" effect="plain">有未保存的修改</el-tag>
-          </div>
-
-          <div v-loading="workPlanLoading" class="wp-scroll">
-            <div class="wp-grid">
-              <div class="wp-corner muted">时间段</div>
-              <div
-                v-for="(label, w) in WORK_WEEKDAYS"
-                :key="'wp-day-' + w"
-                class="wp-day"
-                :class="{ today: w === workPlanTodayWeekday }"
-              >
-                {{ label }}
-                <span v-if="w === workPlanTodayWeekday" class="wp-day-today">今天</span>
-              </div>
-              <template v-for="p in workPlanPresets" :key="p.key">
-                <div class="wp-slot">
-                  <b>{{ p.label }}</b>
-                  <span class="muted wp-slot-range">{{ p.range }}</span>
-                </div>
-                <button
-                  v-for="(dayLabel, w) in WORK_WEEKDAYS"
-                  :key="p.key + '-' + w"
-                  type="button"
-                  class="wp-cell"
-                  :class="{ on: isWorkSlotOn(w, p), today: w === workPlanTodayWeekday }"
-                  :aria-pressed="isWorkSlotOn(w, p)"
-                  :title="workSlotTitle(dayLabel, p, isWorkSlotOn(w, p))"
-                  @click="toggleWorkSlot(w, p)"
-                >
-                  {{ isWorkSlotOn(w, p) ? '上班' : '休' }}
-                </button>
-              </template>
-            </div>
-          </div>
-          <div class="muted wp-tip">
-            固定三档时间段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
-          </div>
-        </div>
-      </aside>
-    </div><!-- /rm-layout -->
+    </div><!-- /日报 · 周报 · PBC 主区 -->
 
     <!-- 详情弹窗 -->
     <el-dialog width="min(94vw, 640px)" v-model="detailVisible">
@@ -793,6 +725,7 @@ import PbcRanking from '../components/PbcRanking.vue';
 import PbcReviewPanel from '../components/PbcReviewPanel.vue';
 import PbcResultCard from '../components/PbcResultCard.vue';
 import ReportsStatsPanel from '../components/ReportsStatsPanel.vue';
+import WorkSchedulePanel from '../components/WorkSchedulePanel.vue';
 import ReportDoc from '../components/ReportDoc.vue';
 import type { DocDay, DocTag } from '../components/report-doc';
 
@@ -802,8 +735,8 @@ const route = useRoute();
 
 // ---- 大 tab（日报 / 周报 / PBC / 日报看板 / 工时统计）----
 // 前三个 tab 直接驱动下面的 type（写卡内部仍按 DAILY/WEEKLY/PBC 分支渲染）；board/hours 内嵌日报看板与工时统计面板
-type TabKey = 'daily' | 'weekly' | 'pbc' | 'board' | 'hours';
-const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'board', 'hours'];
+type TabKey = 'daily' | 'weekly' | 'pbc' | 'board' | 'hours' | 'schedule';
+const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'board', 'hours', 'schedule'];
 const TAB_TYPE: Record<string, 'DAILY' | 'WEEKLY' | 'PBC' | undefined> = {
   daily: 'DAILY',
   weekly: 'WEEKLY',
@@ -850,13 +783,7 @@ watch(
   },
 );
 
-// ---- 右栏「我的工作时间安排」收起态（本地记住，默认展开）----
-const ASIDE_KEY = 'reports-aside-collapsed';
-const asideCollapsed = ref(localStorage.getItem(ASIDE_KEY) === '1');
-function toggleAside() {
-  asideCollapsed.value = !asideCollapsed.value;
-  localStorage.setItem(ASIDE_KEY, asideCollapsed.value ? '1' : '0');
-}
+// ---- 我的工作时间安排已迁出为独立 TAB（components/WorkSchedulePanel.vue，首页复用同一组件）----
 const periodStart = ref('');
 const scope = ref<'me' | 'team'>('me');
 const manualContent = ref('');
@@ -1788,124 +1715,10 @@ function openDetail(r: any) {
   detailVisible.value = true;
 }
 
-// ---- 我的工作时间安排（周一~周日 × 三个预设时间段）：决定当天是否属于「应发日报人员」----
-const WORK_WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-/** 时间段（与后端 common/work-slots.ts 保持一致；接口返回 presets 时以接口为准） */
-type WorkPreset = { key: string; label: string; range: string; startMin: number; endMin: number };
-const WORK_PRESETS_FALLBACK: WorkPreset[] = [
-  { key: 'AM', label: '上午', range: '10:00-12:00', startMin: 10 * 60, endMin: 12 * 60 },
-  { key: 'PM', label: '下午', range: '14:00-18:00', startMin: 14 * 60, endMin: 18 * 60 },
-  { key: 'EVE', label: '晚上', range: '18:00-20:00', startMin: 18 * 60, endMin: 20 * 60 },
-];
-const workPlanPresets = ref<WorkPreset[]>(WORK_PRESETS_FALLBACK);
-/** 当前勾选（键 = `${weekday}-${startMin}`），修改后不保存只存内存 */
-const workPlanSlots = ref<Record<string, boolean>>({});
-/** 上次保存成功的勾选，用于「还原」与未保存提示 */
-const workPlanSavedMap = ref<Record<string, boolean>>({});
-/** 今天周几（0=周一，取后端北京时间口径，避免前端时区漂移） */
-const workPlanTodayWeekday = ref(-1);
-const workPlanTodayLabel = ref('');
-const workPlanLoading = ref(false);
-const workPlanSaving = ref(false);
-
-function workSlotKey(w: number, p: WorkPreset) {
-  return `${w}-${p.startMin}`;
-}
-function isWorkSlotOn(w: number, p: WorkPreset) {
-  return !!workPlanSlots.value[workSlotKey(w, p)];
-}
-function workSlotTitle(dayLabel: string, p: WorkPreset, on: boolean) {
-  return `${dayLabel} ${p.label} ${p.range}：${on ? '已排班，点击取消' : '未排班，点击安排'}`;
-}
-function toggleWorkSlot(w: number, p: WorkPreset) {
-  const k = workSlotKey(w, p);
-  workPlanSlots.value = { ...workPlanSlots.value, [k]: !workPlanSlots.value[k] };
-}
-const workPlanDirty = computed(() => {
-  const pick = (m: Record<string, boolean>) => Object.keys(m).filter((k) => m[k]).sort().join(',');
-  return pick(workPlanSlots.value) !== pick(workPlanSavedMap.value);
-});
-/** 本周共几段/几小时 + 今天几段/几小时（直接决定今天会不会被催日报） */
-const workPlanSummary = computed(() => {
-  const hoursByStart = new Map<number, number>();
-  for (const p of workPlanPresets.value) hoursByStart.set(p.startMin, (p.endMin - p.startMin) / 60);
-  let weekSlots = 0;
-  let weekHours = 0;
-  let todaySlots = 0;
-  let todayHours = 0;
-  for (const [k, on] of Object.entries(workPlanSlots.value)) {
-    if (!on) continue;
-    const [wStr, startStr] = k.split('-');
-    const hours = hoursByStart.get(Number(startStr)) ?? 0;
-    weekSlots += 1;
-    weekHours += hours;
-    if (Number(wStr) === workPlanTodayWeekday.value) {
-      todaySlots += 1;
-      todayHours += hours;
-    }
-  }
-  return {
-    weekSlots,
-    weekHours: Math.round(weekHours * 10) / 10,
-    todaySlots,
-    todayHours: Math.round(todayHours * 10) / 10,
-  };
-});
-function workPlanMapOf(rows: { weekday: number; startMin: number }[] | undefined) {
-  const out: Record<string, boolean> = {};
-  for (const r of rows ?? []) out[`${r.weekday}-${r.startMin}`] = true;
-  return out;
-}
-function applyWorkPlan(r: any) {
-  if (Array.isArray(r?.presets) && r.presets.length) workPlanPresets.value = r.presets;
-  if (Number.isInteger(r?.todayWeekday)) workPlanTodayWeekday.value = r.todayWeekday;
-  if (typeof r?.todayLabel === 'string') workPlanTodayLabel.value = r.todayLabel;
-  const map = workPlanMapOf(r?.slots);
-  workPlanSlots.value = { ...map };
-  workPlanSavedMap.value = { ...map };
-}
-async function loadWorkPlan() {
-  workPlanLoading.value = true;
-  try {
-    applyWorkPlan(await reportsApi.workSlots());
-  } catch {
-    // 加载失败不影响写日报，仅提示
-    ElMessage.error('工作时间安排加载失败，请刷新重试');
-  } finally {
-    workPlanLoading.value = false;
-  }
-}
-function resetWorkPlan() {
-  workPlanSlots.value = { ...workPlanSavedMap.value };
-}
-async function saveWorkPlan() {
-  const slots: { weekday: number; startMin: number; endMin: number }[] = [];
-  for (const p of workPlanPresets.value) {
-    for (let w = 0; w < WORK_WEEKDAYS.length; w++) {
-      if (workPlanSlots.value[workSlotKey(w, p)]) slots.push({ weekday: w, startMin: p.startMin, endMin: p.endMin });
-    }
-  }
-  workPlanSaving.value = true;
-  try {
-    const r = await reportsApi.saveWorkSlots(slots);
-    applyWorkPlan(r ?? { slots });
-    ElMessage.success(
-      slots.length
-        ? `已保存 ${slots.length} 个时间段（每周 ${workPlanSummary.value.weekHours} 小时）`
-        : '已清空工作时间安排：之后不会再收到日报提醒',
-    );
-  } catch {
-    ElMessage.error('保存失败，请稍后重试');
-  } finally {
-    workPlanSaving.value = false;
-  }
-}
-
 onMounted(async () => {
   myProjects.value = await projectsApi.list();
   defaultPeriod();
   loadList();
-  loadWorkPlan();
   // 深链进来就是 PBC tab（type 已同步为 PBC）：补一次 PBC 加载，否则页面是空表
   if (type.value === 'PBC') {
     // ?view=review 直接进「待我审核」，必须停在「我的」视角（团队视角没有这个子视图）
@@ -2253,227 +2066,12 @@ watch(
   font-weight: 600;
   color: #303133;
 }
-/* ---- 我的工作时间安排（周一~周日 × 三个预设时间段） ---- */
-.wp-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.wp-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-}
-.wp-sub {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.5;
-}
-.wp-actions {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-.wp-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 10px 0;
-}
-/* 窄屏横向滚动：格子最窄 62px，7 天 + 时间段列不会挤压变形 */
-.wp-scroll {
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-.wp-grid {
-  display: grid;
-  grid-template-columns: 96px repeat(7, minmax(62px, 1fr));
-  gap: 6px;
-  min-width: 540px;
-}
-.wp-corner {
-  display: flex;
-  align-items: center;
-  font-size: 12px;
-}
-.wp-day {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 4px 0;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #4b6b99;
-}
-.wp-day.today {
-  background: #eaf2ff;
-  color: #1b4fa8;
-}
-.wp-day-today {
-  font-size: var(--fs-2xs);
-  font-weight: 400;
-  color: #1b4fa8;
-}
-.wp-slot {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: #f7f9fc;
-}
-.wp-slot b {
-  font-size: 12px;
-  font-weight: 600;
-  color: #303133;
-}
-.wp-slot-range {
-  font-size: var(--fs-2xs);
-  line-height: 1.4;
-}
-.wp-cell {
-  height: 36px;
-  border: 1px dashed #d9e2f0;
-  border-radius: 8px;
-  background: #fff;
-  color: #a8b4c4;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.wp-cell:hover {
-  border-color: #9dbdf0;
-  color: #3a6bb5;
-}
-.wp-cell.today {
-  border-color: #c7dbfa;
-}
-.wp-cell.on {
-  border-style: solid;
-  border-color: #1b4fa8;
-  background: #1b4fa8;
-  color: #fff;
-  font-weight: 600;
-}
-.wp-tip {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 /* ---- 大 tab：只做顶部导航条，窗格内容留空，下方按 tab 分支渲染 ---- */
 .rm-tabs :deep(.el-tabs__header) {
   margin: 0 0 var(--sp-3);
 }
 .rm-tabs :deep(.el-tabs__content) {
   display: none;
-}
-
-/* ---- 左（填写 + 历史文档）/ 右（可收起的工作时间安排） ---- */
-.rm-layout {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-.rm-main {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.rm-aside {
-  flex: 0 0 372px;
-  width: 372px;
-}
-.rm-layout.is-collapsed .rm-aside {
-  flex-basis: 46px;
-  width: 46px;
-}
-.rm-wp {
-  margin-bottom: 0;
-}
-/* 右栏比整页窄：七列压到 42px（“上班”两字仍放得下），总宽不超栏宽太多避免横向滚动 */
-.rm-aside .wp-grid {
-  grid-template-columns: 62px repeat(7, minmax(42px, 1fr));
-  min-width: 356px;
-}
-.rm-aside .wp-cell {
-  height: 32px;
-  font-size: var(--fs-2xs);
-}
-.rm-aside .wp-slot {
-  padding: 4px 6px;
-}
-.rm-aside .wp-title {
-  font-size: 14px;
-}
-.rm-aside .wp-actions {
-  flex-wrap: wrap;
-}
-/* 收起后只留一条竖标签（绿点=今天有排班，灰点=今天未排班） */
-.rm-rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 14px 6px;
-  border: 1px solid #e4e9f1;
-  border-radius: 10px;
-  background: #fff;
-  cursor: pointer;
-}
-.rm-rail:hover {
-  border-color: #9dbdf0;
-  background: #f6faff;
-}
-.rm-rail-txt {
-  writing-mode: vertical-rl;
-  letter-spacing: 0.12em;
-  font-size: 12px;
-  font-weight: 600;
-  color: #1b4fa8;
-}
-.rm-rail-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #c0c4cc;
-  flex: 0 0 auto;
-}
-.rm-rail-dot.on {
-  background: #67c23a;
-}
-@media (min-width: 1024px) {
-  .rm-aside {
-    position: sticky;
-    top: 12px;
-  }
-}
-/* 平板 / 手机：右栏换行到主列下方，竖标签变整宽横条 */
-@media (max-width: 1023px) {
-  .rm-layout {
-    flex-direction: column;
-  }
-  .rm-aside,
-  .rm-layout.is-collapsed .rm-aside {
-    flex-basis: auto;
-    width: 100%;
-  }
-  .rm-rail {
-    flex-direction: row;
-    justify-content: center;
-  }
-  .rm-rail-txt {
-    writing-mode: horizontal-tb;
-    letter-spacing: 0;
-  }
 }
 
 /* 文档式时间轴的 .rp-* 样式已上提到全局 styles.css：

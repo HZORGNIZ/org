@@ -216,6 +216,11 @@
       </TaskUpdatePopover>
     </div>
 
+    <!-- 我的工作时间安排：每个人首页可见（工作日排班决定当天是否被催日报），与「工作管理 → 我的工作时间」TAB 同一组件 -->
+    <div class="page-card schedule-card">
+      <WorkSchedulePanel :card="false" show-manage-link />
+    </div>
+
         <!-- 我的项目进展 -->
     <div ref="progressSection" class="page-card progress-section" :class="{ 'section-flash': progressFlash }">
       <div class="page-title">
@@ -536,6 +541,7 @@ import HomeRankRotator from '../components/HomeRankRotator.vue';
 import ConvertTaskDialog from '../components/ConvertTaskDialog.vue';
 import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
 import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
+import WorkSchedulePanel from '../components/WorkSchedulePanel.vue';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -1315,8 +1321,9 @@ onMounted(() => {
 .home-grid .todo-card { order: 1; }
 .home-grid .intake-card { order: 2; }
 .home-grid .key-card { order: 3; }
-.home-grid .progress-section { order: 4; }
-.home-grid .side-col { order: 5; }
+.home-grid .schedule-card { order: 4; }
+.home-grid .progress-section { order: 5; }
+.home-grid .side-col { order: 6; }
 
 /* 右侧栏收起按钮：只在桌面宽屏出现（手机端右栏本来就排在下面，不存在“占宽度”问题） */
 .grid-tools {
