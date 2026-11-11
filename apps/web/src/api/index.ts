@@ -177,6 +177,21 @@ export const projectsApi = {
   schedule: (id: string) => api.get<any>(`/projects/${id}/schedule`),
   /** 保存排期计划（全量替换阶段；仅项目负责人/管理员） */
   saveSchedule: (id: string, items: any[]) => api.put<any>(`/projects/${id}/schedule`, { items }),
+  /** 硬件资产清单（项目设置开启 hasHardware 后启用） */
+  hardwareList: (id: string) => api.get<any>(`/projects/${id}/hardware`),
+  /** 新增硬件条目（保管人不传默认项目组长） */
+  hardwareCreate: (
+    id: string,
+    data: { name: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) => api.post<any>(`/projects/${id}/hardware`, data),
+  /** 修改硬件条目 */
+  hardwareUpdate: (
+    id: string,
+    itemId: string,
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) => api.patch<any>(`/projects/${id}/hardware/${itemId}`, data),
+  /** 删除硬件条目 */
+  hardwareRemove: (id: string, itemId: string) => api.del<any>(`/projects/${id}/hardware/${itemId}`),
   /** 项目周报聚合视图（F27）：periodStart 传任意日期归一到该自然周，缺省本周 */
   weeklyReport: (id: string, periodStart?: string) =>
     api.get<any>(`/projects/${id}/weekly-report${periodStart ? `?periodStart=${encodeURIComponent(periodStart)}` : ''}`),

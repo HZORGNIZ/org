@@ -365,6 +365,8 @@ model Project {
   // ---- 立项必填确认：里程碑/需求文档默认必填；勾选「本项目确定不需要」才豁免（发起者显式确认，审批人可见）----
   skipMilestone     Boolean @default(false) // 创建人确认本项目不需要里程碑
   skipRequirementDoc Boolean @default(false) // 创建人确认本项目不需要需求文档
+  // ---- 硬件资产（项目设置开启后，详情页出现「硬件」TAB 管理元件清单）----
+  hasHardware       Boolean @default(false)
   // ---- AI 项目完成度/健康度快照（手动重算 或 GET 详情命中 24h 陈旧时后台补算）----
   completionPercent Int?
   healthLevel       HealthLevel?
@@ -406,6 +408,7 @@ model Project {
   ndaSigns   NdaSign[] // 保密项目的协议签署记录
   rules      ProjectRule[] // 项目规则（负责人/管理员发布，成员需已阅）
   inventories ProjectInventory[] // 关联的资源盘点条目（可空，仅管理员维护）
+  hardware  ProjectHardware[] // 硬件资产/元件清单（项目设置开启 hasHardware 后启用）
 
   @@index([ownerId])
   @@index([approverId, status])
@@ -477,6 +480,26 @@ model ProjectScheduleItem {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, sortOrder])
+}
+
+// 项目硬件资产（详情页「硬件」TAB；项目设置开启 hasHardware 后启用）
+// 状态流转：待采购 → 采购中 → 已采购待领取 → 已分配 → 已归还
+// keeperId 不设外键（避免动 User 模型关系图），展示时按 userId 批量补齐保管人姓名/头像
+model ProjectHardware {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String // 元件名称（如 STM32 主控板）
+  model     String? // 型号
+  desc      String? // 说明（是什么/用途）
+  status    String   @default("TO_PURCHASE") // TO_PURCHASE 待采购 / PURCHASING 采购中 / PURCHASED_PENDING 已采购待领取 / ASSIGNED 已分配 / RETURNED 已归还
+  keeperId  String? // 保管人 userId（新建默认为项目组长/负责人）
+  remark    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
 }
 
 // 项目进展（AI 从钉钉群聊自动总结，或手动记录）

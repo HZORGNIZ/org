@@ -230,6 +230,50 @@ export class ProjectsController {
     return this.projects.saveSchedule(id, user.id, user.role, body?.items ?? []);
   }
 
+  // ---- 硬件资产（项目设置开启 hasHardware 后，详情页「硬件」TAB）----
+
+  /** 硬件清单（项目成员/负责人/关联部门负责人可见；保密项目需先签协议） */
+  @Get(':id/hardware')
+  hardwareList(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.hardwareList(id, user.id, user.role);
+  }
+
+  /** 新增硬件条目（仅项目负责人/系统管理员）；保管人不传默认项目组长 */
+  @Post(':id/hardware')
+  async hardwareCreate(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body()
+    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertCanManage(id, user.id);
+    return this.projects.hardwareCreate(id, user.id, user.role, body ?? {});
+  }
+
+  /** 修改硬件条目（仅项目负责人/系统管理员） */
+  @Patch(':id/hardware/:itemId')
+  async hardwareUpdate(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body()
+    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertCanManage(id, user.id);
+    return this.projects.hardwareUpdate(id, itemId, user.id, user.role, body ?? {});
+  }
+
+  /** 删除硬件条目（仅项目负责人/系统管理员） */
+  @Delete(':id/hardware/:itemId')
+  async hardwareRemove(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertCanManage(id, user.id);
+    return this.projects.hardwareRemove(id, itemId, user.id, user.role);
+  }
+
   /** 项目周报聚合视图（F27）：?periodStart= 任意日期归一到该北京自然周，默认本周 */
   @Get(':id/weekly-report')
   weeklyReport(
@@ -382,6 +426,7 @@ export class ProjectsController {
       milestones?: { name: string; dueDate: string; description?: string | null }[];
       skipMilestone?: boolean;
       skipRequirementDoc?: boolean;
+      hasHardware?: boolean;
     },
   ) {
     // 仅管理员或项目 OWNER/ADMIN 可修改项目设置（含钉钉群关联）

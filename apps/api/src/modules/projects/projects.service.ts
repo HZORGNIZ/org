@@ -1984,6 +1984,93 @@ export class ProjectsService {
     return this.schedule(projectId, userId, role);
   }
 
+  // ---- 硬件资产（项目设置开启 hasHardware 后，详情页「硬件」TAB）----
+
+  /** 硬件状态白名单：待采购 / 采购中 / 已采购待领取 / 已分配 / 已归还 */
+  static readonly HW_STATUS = ['TO_PURCHASE', 'PURCHASING', 'PURCHASED_PENDING', 'ASSIGNED', 'RETURNED'];
+  private static readonly HW_STATUS_SET = new Set(ProjectsService.HW_STATUS);
+
+  /** 项目硬件清单（项目成员/负责人/关联部门负责人可见；保密项目需先签协议，与规则同口径） */
+  async hardwareList(projectId: string, userId: string, role: string) {
+    await this.assertRuleViewer(projectId, userId, role);
+    const items = await this.prisma.projectHardware.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const keeperIds = [...new Set(items.map((i) => i.keeperId).filter(Boolean) as string[])];
+    const keepers = keeperIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: keeperIds } }, select: { id: true, name: true, avatar: true } })
+      : [];
+    const byId = new Map(keepers.map((u) => [u.id, u]));
+    return {
+      ok: true,
+      items: items.map((i) => ({ ...i, keeper: i.keeperId ? byId.get(i.keeperId) ?? null : null })),
+    };
+  }
+
+  /** 新增硬件条目（仅项目负责人/管理员）；保管人不传默认项目组长（负责人） */
+  async hardwareCreate(
+    projectId: string,
+    userId: string,
+    role: string,
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, ownerId: true, hasHardware: true },
+    });
+    if (!project) throw new NotFoundException('项目不存在');
+    if (!project.hasHardware) throw new BadRequestException('本项目未开启硬件资产管理（项目设置 → 硬件资产）');
+    if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
+    const row = this.normalizeHardware(data, project.ownerId);
+    const created = await this.prisma.projectHardware.create({ data: { projectId, ...row } });
+    return { ok: true, item: created };
+  }
+
+  /** 修改硬件条目（仅项目负责人/管理员） */
+  async hardwareUpdate(
+    projectId: string,
+    itemId: string,
+    userId: string,
+    role: string,
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+  ) {
+    const existing = await this.prisma.projectHardware.findUnique({ where: { id: itemId } });
+    if (!existing || existing.projectId !== projectId) throw new NotFoundException('硬件条目不存在');
+    if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
+    const row = this.normalizeHardware(data, existing.keeperId);
+    const updated = await this.prisma.projectHardware.update({ where: { id: itemId }, data: row });
+    return { ok: true, item: updated };
+  }
+
+  /** 删除硬件条目（仅项目负责人/管理员） */
+  async hardwareRemove(projectId: string, itemId: string, userId: string, role: string) {
+    const existing = await this.prisma.projectHardware.findUnique({ where: { id: itemId } });
+    if (!existing || existing.projectId !== projectId) throw new NotFoundException('硬件条目不存在');
+    if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
+    await this.prisma.projectHardware.delete({ where: { id: itemId } });
+    return { ok: true };
+  }
+
+  /** 硬件入参收敛：名称必填、状态白名单、文本限长；defaultKeeperId 为空时保管人置空 */
+  private normalizeHardware(
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    defaultKeeperId: string | null,
+  ) {
+    const name = String(data?.name ?? '').trim();
+    if (!name) throw new BadRequestException('请填写元件名称');
+    const status = String(data?.status ?? 'TO_PURCHASE').toUpperCase();
+    if (!ProjectsService.HW_STATUS_SET.has(status)) throw new BadRequestException('硬件状态不合法');
+    return {
+      name: name.slice(0, 60),
+      model: data?.model ? String(data.model).trim().slice(0, 80) : null,
+      desc: data?.desc ? String(data.desc).trim().slice(0, 300) : null,
+      status,
+      keeperId: data?.keeperId ? String(data.keeperId) : defaultKeeperId ?? null,
+      remark: data?.remark ? String(data.remark).trim().slice(0, 300) : null,
+    };
+  }
+
   /** 供 update/成员管理操作权限校验使用 */
   async assertCanManage(projectId: string, userId: string) {
     if (!(await this.canManage(projectId, userId))) {

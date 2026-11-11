@@ -367,7 +367,7 @@
 
       <el-tab-pane name="tasks">
         <template #label>任务</template>
-      <!-- 任务清单：项目下全部任务（含看板列与列表任务），点击行查看详情 -->
+        <!-- 任务清单：项目下全部任务（含看板列与列表任务），点击行查看详情 -->
       <div class="page-card tasks-card" v-loading="tasksLoading">
         <div class="block-title-row">
           <span class="block-title">任务清单（{{ tasks.length }}）</span>
@@ -430,6 +430,18 @@
         </el-table>
         <div v-if="!tasks.length && !tasksLoading" class="muted empty">该项目暂无任务，点右上角「新建任务」创建</div>
       </div>
+      </el-tab-pane>
+
+      <el-tab-pane v-if="project?.hasHardware" name="hardware">
+        <template #label>硬件</template>
+        <!-- 硬件：本项目元件清单（名称/型号/说明/状态/保管人/备注）；项目设置开启「硬件资产」后才显示 -->
+        <ProjectHardwarePanel
+          v-if="project?.id"
+          :project-id="project.id"
+          :can-manage="canManageSchedule"
+          :owner="project?.owner"
+          :users="users"
+        />
       </el-tab-pane>
 
       <el-tab-pane name="meetings">
@@ -710,6 +722,12 @@
             <span class="muted">存档即暂停开发：项目不再显示在首页与项目列表，也不再自动总结进展/发送日报；可在「项目 - 已存档」中随时恢复开发</span>
           </div>
         </el-form-item>
+        <el-form-item label="硬件资产">
+          <div class="digest-switch">
+            <el-switch v-model="editForm.hasHardware" />
+            <span class="muted">开启后详情页出现「硬件」TAB，可登记本项目元件（名称 / 型号 / 说明 / 状态 / 保管人 / 备注）；保管人默认为项目组长，状态含采购中、待采购、已采购待领取、已分配、已归还</span>
+          </div>
+        </el-form-item>
         <el-form-item label="转让项目负责人（原负责人自动降为普通成员）">
           <div class="transfer-owner">
             <el-select v-model="transferUserId" placeholder="选择新负责人" filterable size="small" style="flex: 1">
@@ -813,6 +831,7 @@ import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
 import ProjectDailyPanel from '../components/ProjectDailyPanel.vue';
 import ProjectSchedulePanel from '../components/ProjectSchedulePanel.vue';
 import ProjectMemberSchedulePanel from '../components/ProjectMemberSchedulePanel.vue';
+import ProjectHardwarePanel from '../components/ProjectHardwarePanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -820,11 +839,13 @@ const auth = useAuthStore();
 
 const project = ref<any>(null);
 // 重点板块改由 Tab 分组展示；Tab 状态写入 ?tab= 便于深链（首页/消息里的「项目日报」入口可直接跳到日报 Tab）
-const TAB_NAMES = ['overview', 'schedule', 'daily', 'worktime', 'tasks', 'meetings', 'weekly', 'docs'];
+const TAB_NAMES = ['overview', 'schedule', 'daily', 'worktime', 'tasks', 'hardware', 'meetings', 'weekly', 'docs'];
 const activeTab = computed({
   get: () => {
     const q = String(route.query.tab ?? '');
-    return TAB_NAMES.includes(q) ? q : 'overview';
+    // 「硬件」TAB 仅在项目设置开启硬件资产后存在，未开启的项目深链回到概览
+    const names = TAB_NAMES.filter((n) => n !== 'hardware' || project.value?.hasHardware);
+    return names.includes(q) ? q : 'overview';
   },
   // el-tabs 的 v-model 要能写回 URL，否则点 Tab 只高亮不切内容
   set: (name: string) => setTab(name),
@@ -952,7 +973,7 @@ const tasksLoading = ref(false);
 const taskDrawer = ref(false);
 const currentTaskId = ref<string | null>(null);
 const taskFormVisible = ref(false);
-const editForm = reactive({ name: '', description: '', color: '#428bff', dingtalkConversationId: '', dingtalkGroupName: '', dailyDigestEnabled: false, digestTime: '20:00', digestEveryDays: 1, archived: false, departmentIds: [] as string[], confidential: false });
+const editForm = reactive({ name: '', description: '', color: '#428bff', dingtalkConversationId: '', dingtalkGroupName: '', dailyDigestEnabled: false, digestTime: '20:00', digestEveryDays: 1, archived: false, hasHardware: false, departmentIds: [] as string[], confidential: false });
 
 /** 保密项目未签协议：详情接口只回 { locked: 'NDA', nda } 锁定壳 */
 const ndaLocked = computed(() => project.value?.locked === 'NDA');
@@ -1412,6 +1433,7 @@ function syncEditForm() {
   editForm.digestTime = project.value.digestTime ?? '20:00';
   editForm.digestEveryDays = project.value.digestEveryDays ?? 1;
   editForm.archived = project.value.archived ?? false;
+  editForm.hasHardware = project.value.hasHardware ?? false;
   editForm.departmentIds = (project.value.departments || []).map((d: any) => d.id);
   editForm.confidential = project.value.confidential ?? false;
 }
@@ -1569,6 +1591,7 @@ async function saveSettings() {
       digestTime: editForm.digestTime || '20:00',
       digestEveryDays: editForm.digestEveryDays || 1,
       archived: editForm.archived,
+      hasHardware: editForm.hasHardware,
       departmentIds: editForm.departmentIds,
     });
     // 保密标记走独立接口（仅管理员）：通用改项目接口会一律忽略 confidential
