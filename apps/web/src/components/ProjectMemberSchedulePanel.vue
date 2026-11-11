@@ -10,8 +10,8 @@
       <div class="pms-title">
         <span class="block-title">成员工作时间安排</span>
         <span class="muted pms-sub">
-          本项目成员的每周固定上班时段（周一~周日 × 上午 / 下午 / 晚上）；
-          只有当天排了班，系统才会把他算作「应发日报人员」发提醒。
+          本项目成员的每周固定项目实践时段（周一~周日 × 上午 / 下午 / 晚上）；
+          只有当天勾选了时段，系统才会把他算作「应发日报人员」发提醒。
         </span>
       </div>
       <div class="pms-tools">
@@ -76,7 +76,7 @@
           </el-tag>
           <el-tag size="small" :type="(cur.todaySlots || []).length ? 'primary' : 'info'" effect="plain">
             今天（{{ todayLabel || '—' }}）
-            {{ (cur.todaySlots || []).length ? `${cur.todaySlots.length} 段 · ${cur.todayHours} 小时` : '未排班，今天不会收到日报提醒' }}
+            {{ (cur.todaySlots || []).length ? `${cur.todaySlots.length} 段 · ${cur.todayHours} 小时` : '未勾选，今天不会收到日报提醒' }}
           </el-tag>
         </div>
 
@@ -102,9 +102,10 @@
                 :key="p.key + '-pms-' + w"
                 class="pms-cell"
                 :class="{ on: isOn(w, p), today: w === todayWeekday }"
-                :title="`${dayLabel} ${p.label} ${p.range}：${isOn(w, p) ? '已排班' : '未排班'}`"
+                :title="`${dayLabel} ${p.label} ${p.range}：${isOn(w, p) ? '已勾选' : '未勾选'}`"
               >
-                {{ isOn(w, p) ? '上班' : '休' }}
+                <el-icon v-if="isOn(w, p)" class="pms-check"><Check /></el-icon>
+                <span v-else>休</span>
               </div>
             </template>
           </div>
@@ -121,6 +122,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Check } from '@element-plus/icons-vue';
 import { reportsApi } from '../api';
 
 const props = withDefaults(
@@ -533,6 +535,10 @@ onUnmounted(() => {
   background: #1b4fa8;
   color: #fff;
   font-weight: 600;
+}
+.pms-check {
+  font-size: 16px;
+  font-weight: 700;
 }
 .pms-tip {
   margin-top: 8px;
