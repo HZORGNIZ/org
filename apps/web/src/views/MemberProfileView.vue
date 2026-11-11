@@ -147,7 +147,7 @@
             </div>
             <div class="muted pf-freq">部门要求：{{ FREQ_LABEL[p.reports.frequency] || '未设置' }}</div>
             <div class="pf-cal">
-              <div v-for="c in p.reports.calendar" :key="c.date" class="pf-cal-cell" :title="`${c.date} ${c.written ? '已写 ' + (c.hours ?? 0) + 'h' : c.planned ? '应写未写' : '未排班'}`">
+              <div v-for="c in p.reports.calendar" :key="c.date" class="pf-cal-cell" :title="`${c.date} ${c.written ? '已写 ' + (c.hours ?? 0) + 'h' : c.planned ? '应写未写' : '未勾选时段'}`">
                 <div class="pf-cal-dot" :class="c.written ? 'on' : c.planned ? 'due' : 'off'"></div>
                 <div class="muted pf-cal-d">{{ c.date.slice(8) }}</div>
               </div>
@@ -155,7 +155,7 @@
             <div class="muted pf-legend">
               <span><i class="pf-cal-dot on"></i>已写</span>
               <span><i class="pf-cal-dot due"></i>应写未写</span>
-              <span><i class="pf-cal-dot off"></i>未排班</span>
+              <span><i class="pf-cal-dot off"></i>未勾选时段</span>
             </div>
             <!-- 逐月报告清单：日报/周报各几篇、哪几天写的（正文看下方时间轴卡） -->
             <div class="pf-rm">

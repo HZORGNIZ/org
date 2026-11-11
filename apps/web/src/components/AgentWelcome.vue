@@ -103,8 +103,8 @@ const dailyHint = computed(() => {
   const d = ov.value?.daily;
   if (!d) return '日报状态加载中';
   if (d.wrote) return `今日工时 ${d.todayHours || '—'} 小时`;
-  // 没写：区分「排了班（该写）」与「没排班（不算应发）」
-  return d.plannedToday ? '还没写，点下方帮我写' : '今日没排班，不算应发';
+  // 没写：区分「勾选了时段（该写）」与「没勾选（不算应发）」
+  return d.plannedToday ? '还没写，点下方帮我写' : '今日未勾选时段，不算应发';
 });
 
 const rankText = computed(() => {

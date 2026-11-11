@@ -4,7 +4,7 @@
       <div class="wp-title">
         {{ title }}
         <span class="muted wp-sub">
-          勾选每周固定上班的时间段；只有当天排了班，系统才会在提醒时间把你当「应发日报人员」催日报。
+          勾选每周固定项目实践的时间段；只有当天勾选了时段，系统才会在提醒时间把你当「应发日报人员」催日报。
         </span>
       </div>
       <div class="wp-actions">
@@ -22,7 +22,7 @@
       </el-tag>
       <el-tag size="small" :type="summary.todaySlots ? 'primary' : 'info'" effect="plain">
         今天（{{ todayLabel || '—' }}）
-        {{ summary.todaySlots ? `${summary.todaySlots} 段 · ${summary.todayHours} 小时` : '未排班，今天不会收到日报提醒' }}
+        {{ summary.todaySlots ? `${summary.todaySlots} 段 · ${summary.todayHours} 小时` : '未勾选，今天不会收到日报提醒' }}
       </el-tag>
       <el-tag v-if="dirty" size="small" type="warning" effect="plain">有未保存的修改</el-tag>
     </div>
@@ -54,13 +54,14 @@
             :title="slotTitle(dayLabel, p, isSlotOn(w, p))"
             @click="toggleSlot(w, p)"
           >
-            {{ isSlotOn(w, p) ? '上班' : '休' }}
+            <el-icon v-if="isSlotOn(w, p)" class="wp-check"><Check /></el-icon>
+            <span v-else>休</span>
           </button>
         </template>
       </div>
     </div>
     <div class="muted wp-tip">
-      固定三档时间段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
+      固定三档项目实践时段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
     </div>
   </div>
 </template>
@@ -69,6 +70,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { Check } from '@element-plus/icons-vue';
 import { reportsApi } from '../api';
 
 withDefaults(
@@ -104,7 +106,7 @@ const saving = ref(false);
 const slotKey = (w: number, p: WorkPreset) => `${w}-${p.startMin}`;
 const isSlotOn = (w: number, p: WorkPreset) => !!slots.value[slotKey(w, p)];
 const slotTitle = (dayLabel: string, p: WorkPreset, on: boolean) =>
-  `${dayLabel} ${p.label} ${p.range}：${on ? '已排班，点击取消' : '未排班，点击安排'}`;
+  `${dayLabel} ${p.label} ${p.range}：${on ? '已勾选，点击取消' : '未勾选，点击安排'}`;
 
 function toggleSlot(w: number, p: WorkPreset) {
   const k = slotKey(w, p);
@@ -315,6 +317,10 @@ onMounted(load);
   background: #1b4fa8;
   color: #fff;
   font-weight: 600;
+}
+.wp-check {
+  font-size: 16px;
+  font-weight: 700;
 }
 .wp-tip {
   margin-top: 8px;

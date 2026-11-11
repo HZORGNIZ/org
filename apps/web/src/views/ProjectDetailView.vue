@@ -361,7 +361,7 @@
 
       <el-tab-pane name="worktime">
         <template #label>成员工作时间</template>
-        <!-- 成员工作时间：本项目成员每周固定上班时段（只读；成员自己在「工作管理 → 我的工作时间」调整） -->
+        <!-- 成员工作时间：本项目成员每周固定的项目实践时段（只读；成员自己在「工作管理 → 我的工作时间」调整） -->
         <ProjectMemberSchedulePanel :members="displayMembers" :owner="project?.owner" />
       </el-tab-pane>
 
