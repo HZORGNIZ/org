@@ -44,22 +44,9 @@
               {{ d.name }}
             </el-tag>
           </div>
-          <div class="muted head-meta">
-            <el-avatar :size="20" :src="project.owner?.avatar || undefined" class="head-avatar">{{ project.owner?.name?.slice(0, 1) }}</el-avatar>
-            <span>{{ project.owner?.name }}（负责人）</span>
-            <span>· {{ displayMembers.length + 1 }} 名成员</span>
-            <span>· {{ taskCount }} 个任务</span>
-          </div>
-          <!-- 项目介绍：超 2 行折叠省略，悬浮显示全文（避免长介绍把头部撑很长） -->
-          <el-tooltip v-if="project.description" :show-after="300" placement="bottom-start" :disabled="!descOverflow">
-            <template #content>
-              <span style="white-space: pre-wrap; display: block; max-width: 420px; max-height: 260px; overflow: auto;">{{ project.description }}</span>
-            </template>
-            <div ref="descEl" class="desc clamped">{{ project.description }}</div>
-          </el-tooltip>
+          <!-- 页头只保留一行：负责人/成员/介绍已移到概览底部「项目信息」折叠区（默认收起） -->
         </div>
         <div class="head-actions">
-          <el-button size="small" @click="goDailyTab">项目日报</el-button>
           <el-button v-if="canSettings" size="small" @click="openSettings">
             <el-icon><Setting /></el-icon>&nbsp;项目设置
           </el-button>
@@ -306,17 +293,33 @@
             <div v-if="(project.requirementDocIds || []).length" class="muted" style="font-size: 12px; margin-bottom: 4px">共 {{ project.requirementDocIds.length }} 份，已归入项目文档空间</div>
             <div v-else class="muted" style="font-size: 12px">{{ project.skipRequirementDoc ? '创建人已确认：本项目确定不需要需求文档' : '尚未上传需求文档' }}</div>
           </div>
+        </aside>
+      </div>
 
-          <!-- 成员 -->
-          <div class="page-card">
-            <div class="block-title">成员（{{ displayMembers.length + 1 }}）</div>
-            <!-- 负责人固定展示（负责人身份由 ownerId 表达，不在成员表里） -->
+      <!-- 项目信息（负责人 / 成员 / 项目介绍）：概览底部一行，默认收起，点击展开 -->
+      <div class="page-card info-card">
+        <div class="info-toggle" @click="infoOpen = !infoOpen">
+          <span class="block-title">项目信息</span>
+          <span class="muted info-summary">
+            {{ project.owner?.name }}（负责人） · {{ displayMembers.length + 1 }} 名成员 · {{ taskCount }} 个任务
+          </span>
+          <span class="info-hint muted">{{ infoOpen ? '收起' : '展开' }}</span>
+          <el-icon class="info-arrow" :class="{ open: infoOpen }"><ArrowDown /></el-icon>
+        </div>
+        <div v-show="infoOpen" class="info-body">
+          <div class="info-block">
+            <div class="block-title">负责人</div>
             <div v-if="project.owner" class="member">
               <el-avatar :size="28" :src="project.owner?.avatar || undefined">{{ project.owner?.name?.slice(0, 1) }}</el-avatar>
               <a class="member-name name-link" title="查看成员画像" @click="$router.push('/members/' + project.owner.id)">{{ project.owner?.name }}</a>
               <el-tag size="small" type="danger" effect="plain">负责人</el-tag>
               <el-icon class="owner-tag"><Crown /></el-icon>
             </div>
+            <div v-else class="muted">未设置负责人</div>
+          </div>
+          <div class="info-block">
+            <div class="block-title">成员（{{ displayMembers.length + 1 }}）</div>
+            <!-- 负责人身份由 ownerId 表达，不在成员表里；岗位设置/移除/添加等管理操作随成员信息一并收进此处 -->
             <div v-for="m in displayMembers" :key="m.userId" class="member">
               <el-avatar :size="28" :src="m.user?.avatar || undefined">{{ m.user?.name?.slice(0, 1) }}</el-avatar>
               <a class="member-name name-link" title="查看成员画像" @click="$router.push('/members/' + m.userId)">{{ m.user?.name }}</a>
@@ -343,7 +346,12 @@
               <el-button size="small" type="primary" :disabled="!newMemberId" @click="addMember">添加</el-button>
             </div>
           </div>
-        </aside>
+          <div class="info-block">
+            <div class="block-title">项目介绍</div>
+            <div v-if="project.description" class="info-desc">{{ project.description }}</div>
+            <div v-else class="muted">暂无项目介绍</div>
+          </div>
+        </div>
       </div>
         </el-tab-pane>
 
@@ -862,10 +870,6 @@ function setTab(name: string) {
 }
 // 项目日报面板实例：切 Tab 后不需要再滚动定位，但保留引用便于后续扩展
 const dailyRef = ref<any>(null);
-function goDailyTab() {
-  setTab('daily');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
 const users = ref<any[]>([]);
 const loading = ref(false);
 const refreshing = ref(false);
@@ -1798,7 +1802,6 @@ onMounted(async () => {
   positions.value = await departmentsApi.positions().catch(() => []);
   departments.value = await departmentsApi.list().catch(() => []);
   load();
-  window.addEventListener('resize', checkDescOverflow);
 });
 
 watch(
@@ -1813,30 +1816,20 @@ watch(
 onUnmounted(() => {
   disposed = true;
   stopPolling();
-  window.removeEventListener('resize', checkDescOverflow);
 });
 
-// ---- 项目介绍折叠检测：超 2 行截断时悬浮显示全文 ----
-const descEl = ref<HTMLElement | null>(null);
-const descOverflow = ref(false);
-function checkDescOverflow() {
-  const el = descEl.value;
-  descOverflow.value = !!el && el.scrollHeight - el.clientHeight > 1;
-}
-watch(
-  () => [route.params.id, project.value?.description],
-  () => nextTick(checkDescOverflow),
-);
+// ---- 概览底部「项目信息」折叠区：负责人 / 成员 / 介绍，默认收起 ----
+const infoOpen = ref(false);
 </script>
 
 <style scoped>
 /* 项目详情页头：深宝蓝渐变，与全站深色结构块一致 */
 .detail-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   margin-bottom: 14px;
-  padding: 14px 16px;
+  padding: 10px 16px;
   border-radius: 10px;
   background: linear-gradient(135deg, #0f3572 0%, #123e86 45%, #1b4fa8 75%, #428bff 100%);
   color: #fff;
@@ -1855,12 +1848,9 @@ watch(
 .detail-head .muted {
   color: #c3d9f7;
 }
-.detail-head .desc {
-  color: #dbe9ff;
-}
 .head-left {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   flex: 1;
   min-width: 0;
@@ -1895,34 +1885,62 @@ watch(
   border-radius: 3px;
   flex-shrink: 0;
 }
-.head-meta {
-  /* 不用 flex：每个 span 会变成独立可断行单元，宽屏下也会被挤成逐个换行（负责人名字一字一行）；
-     改成普通文本流后「·」分隔符自然连排，窄屏按文字断行 */
-  font-size: 13px;
-  display: block;
+/* ---- 概览底部「项目信息」折叠区：负责人 / 成员 / 项目介绍，默认收起 ---- */
+.info-card {
+  padding: 10px 16px;
 }
-.head-meta > span {
-  margin-right: 8px;
+.info-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 28px;
 }
-.head-avatar {
-  background: var(--app-brand);
-  color: #fff;
-  vertical-align: middle;
-}
-.desc {
-  color: #606266;
-  font-size: 13px;
-  margin-top: 4px;
-}
-/* 介绍超 2 行折叠省略，悬浮 el-tooltip 显示全文 */
-.detail-head .desc.clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+.info-summary {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.info-hint {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.info-arrow {
+  color: #909399;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.info-arrow.open {
+  transform: rotate(180deg);
+}
+.info-body {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f2f5;
+}
+.info-block .member {
+  padding: 4px 0;
+}
+.info-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
-  cursor: default;
+  max-height: 320px;
+  overflow: auto;
+}
+@media (max-width: 900px) {
+  .info-body {
+    grid-template-columns: 1fr;
+  }
 }
 .detail-grid {
   display: grid;
@@ -2363,7 +2381,6 @@ watch(
 /* 页头右侧「项目设置」按钮 */
 .head-actions {
   margin-left: auto;
-  align-self: flex-start;
   flex-shrink: 0;
 }
 /* 项目文档 */
