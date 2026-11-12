@@ -9,6 +9,9 @@
       </div>
       <div class="wp-actions">
         <el-button v-if="showManageLink" size="small" text type="primary" @click="goReports">去工作管理 →</el-button>
+        <el-button v-if="hasDefaultWeekend" size="small" type="warning" plain :disabled="saving || loading" @click="clearWeekendDefaults">
+          取消周末默认时段
+        </el-button>
         <el-button size="small" :disabled="!dirty || saving || loading" @click="reset">还原</el-button>
         <el-button size="small" type="primary" :loading="saving" :disabled="!dirty || loading" @click="save">
           保存安排
@@ -62,6 +65,10 @@
     </div>
     <div class="muted wp-tip">
       固定三档项目实践时段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
+      <template v-if="hasDefaultWeekend">
+        系统此前为你默认安排了周六/周日的下午与晚上，如不需要可点右上角
+        <b>「取消周末默认时段」</b>一键取消（其余勾选不受影响）。
+      </template>
     </div>
   </div>
 </template>
@@ -69,7 +76,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
 import { reportsApi } from '../api';
 
@@ -172,6 +179,26 @@ async function load() {
 
 function reset() {
   slots.value = { ...savedMap.value };
+}
+
+// ---- 一键取消周末默认时段：系统此前批量默认的 周六(5)/周日(6) × 下午(840)/晚上(1080) ----
+const DEFAULT_WEEKEND_KEYS = ['5-840', '5-1080', '6-840', '6-1080'];
+const hasDefaultWeekend = computed(() => DEFAULT_WEEKEND_KEYS.some((k) => savedMap.value[k]));
+
+async function clearWeekendDefaults() {
+  try {
+    await ElMessageBox.confirm(
+      '将取消周六、周日的「下午 14:00-18:00」与「晚上 18:00-20:00」共 4 个默认时段，其余勾选保持不变，保存后立即生效。',
+      '取消周末默认时段',
+      { type: 'warning', confirmButtonText: '确认取消', cancelButtonText: '先不改' },
+    );
+  } catch {
+    return; // 用户点了「先不改」
+  }
+  const next = { ...slots.value };
+  for (const k of DEFAULT_WEEKEND_KEYS) next[k] = false;
+  slots.value = next;
+  await save();
 }
 
 async function save() {

@@ -38,10 +38,21 @@
       需求评审 / 开发 / 测试 / 联调 / 上线 / 验收，再按实际情况调整。
     </div>
 
-    <!-- 只读视图：每个阶段一行，下面是相对项目计划期的进度条（含今天标记） -->
+    <!-- 只读视图：每个阶段一行，下面是相对项目计划期的进度条（含今天标记）；可编辑者可拖动行调整顺序，松手即保存 -->
     <div v-else-if="!editing" class="psc-list">
-      <div v-for="(it, i) in items" :key="it.id" class="psc-row" :class="`is-${it.status.toLowerCase()}`">
+      <div
+        v-for="(it, i) in items"
+        :key="it.id"
+        class="psc-row"
+        :class="[`is-${it.status.toLowerCase()}`, { 'is-dragging': dragFrom === i }]"
+        :draggable="editable && !reorderSaving"
+        @dragstart="onRowDragStart(i)"
+        @dragover.prevent
+        @drop.prevent="onRowDrop(i)"
+        @dragend="dragFrom = -1"
+      >
         <div class="psc-line">
+          <span v-if="editable" class="psc-drag" title="拖动调整顺序"><el-icon><Rank /></el-icon></span>
           <span class="psc-no">{{ i + 1 }}</span>
           <span class="psc-name" :title="it.name">{{ it.name }}</span>
           <el-tag size="small" :type="tagType(it)" effect="plain" class="psc-tag">{{ statusText(it) }}</el-tag>
@@ -55,13 +66,22 @@
         <div v-if="it.note" class="psc-note">{{ it.note }}</div>
       </div>
       <div class="psc-legend muted">
-        进度条按项目计划期铺开，蓝色竖线是今天；逾期指已过结束日但状态还不是「已完成」。
+        进度条按项目计划期铺开，蓝色竖线是今天；逾期指已过结束日但状态还不是「已完成」。{{ editable ? '按住行首图标拖动可调整阶段顺序。' : '' }}
       </div>
     </div>
 
-    <!-- 编辑视图：整表替换，保存后即为正式排期 -->
+    <!-- 编辑视图：整表替换，保存后即为正式排期；行首手柄可拖动调整草稿顺序 -->
     <div v-else class="psc-edit">
-      <div v-for="(row, i) in draft" :key="i" class="psc-edit-row">
+      <div
+        v-for="(row, i) in draft"
+        :key="i"
+        class="psc-edit-row"
+        :class="{ 'is-dragging': dragFrom === i }"
+        @dragover.prevent
+        @drop.prevent="onDraftDrop(i)"
+        @dragend="dragFrom = -1"
+      >
+        <span class="psc-drag" draggable="true" title="拖动调整顺序" @dragstart="onDraftDragStart(i)"><el-icon><Rank /></el-icon></span>
         <span class="psc-no">{{ i + 1 }}</span>
         <el-input v-model="row.name" size="small" placeholder="阶段名（如 需求评审）" class="pe-name" maxlength="40" />
         <el-date-picker
@@ -100,6 +120,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Rank } from '@element-plus/icons-vue';
 import { projectsApi } from '../api';
 
 const props = withDefaults(defineProps<{ projectId: string; canEdit?: boolean }>(), { canEdit: false });
@@ -228,6 +249,50 @@ function cancelEdit() {
   draft.value = [];
 }
 
+// ---- 拖拽排序：只读视图（可编辑者拖完即保存）与编辑视图（只调草稿顺序）共用 dragFrom ----
+const dragFrom = ref(-1);
+const reorderSaving = ref(false);
+
+function onRowDragStart(i: number) {
+  dragFrom.value = i;
+}
+
+async function onRowDrop(target: number) {
+  const from = dragFrom.value;
+  dragFrom.value = -1;
+  if (from < 0 || from === target) return;
+  const list = [...items.value];
+  const [moved] = list.splice(from, 1);
+  list.splice(target, 0, moved);
+  reorderSaving.value = true;
+  try {
+    // 保存接口按传入顺序落 sortOrder，整表替换但内容不变，只改顺序
+    data.value = await projectsApi.saveSchedule(
+      props.projectId,
+      list.map((r) => ({ name: r.name, startDate: r.startDate, endDate: r.endDate, status: r.status, note: r.note || null })),
+    );
+    ElMessage.success('阶段顺序已保存');
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '顺序保存失败');
+  } finally {
+    reorderSaving.value = false;
+  }
+}
+
+function onDraftDragStart(i: number) {
+  dragFrom.value = i;
+}
+
+function onDraftDrop(target: number) {
+  const from = dragFrom.value;
+  dragFrom.value = -1;
+  if (from < 0 || from === target) return;
+  const list = [...draft.value];
+  const [moved] = list.splice(from, 1);
+  list.splice(target, 0, moved);
+  draft.value = list;
+}
+
 async function save() {
   if (!draft.value.length) {
     ElMessage.warning('至少保留 1 个阶段');
@@ -348,6 +413,22 @@ watch(
   border-left: 3px solid #c0c4cc;
   border-radius: 8px;
   background: #fcfdff;
+}
+/* 可编辑者的拖拽手柄与拖动中的视觉反馈 */
+.psc-drag {
+  display: inline-flex;
+  color: #b6c3d6;
+  cursor: grab;
+  flex: 0 0 auto;
+}
+.psc-drag:hover {
+  color: #2f6fed;
+}
+.psc-drag:active {
+  cursor: grabbing;
+}
+.is-dragging {
+  opacity: 0.45;
 }
 .psc-row.is-doing {
   border-left-color: #2f6fed;
