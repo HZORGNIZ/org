@@ -260,7 +260,7 @@ const ACTION_TITLES: Record<string, string> = {
   NOTIFY_BROADCAST: '发通知到群/个人（自动附处理链接）',
   DAILY_SUBMIT: '提交今日日报',
   WEEKLY_SUBMIT: '提交周报',
-  WORK_SCHEDULE_SET: '设置我的工作时间安排',
+  WORK_SCHEDULE_SET: '设置我的工作/培训时间安排',
   DAILY_CHASE: '催今日日报（分群点名＋站内提醒）',
   RISK_ALERT: '风险项目提醒对应负责人',
 };
@@ -806,7 +806,7 @@ async function confirmAction(m: AgentMsg) {
     } else if (a.kind === 'WORK_SCHEDULE_SET') {
       // 直接复用首页同一接口 PUT /reports/work-slots（整表覆盖、天然按本人收敛），不在 Agent 里重写权限
       await reportsApi.saveWorkSlots(a.slots ?? []);
-      resultLabel = a.clearedAll ? '已清空我的工作时间安排' : `已更新我的工作时间（本周合计 ${a.weeklyHours} 小时）`;
+      resultLabel = a.clearedAll ? '已清空我的工作/培训时间安排' : `已更新我的工作/培训时间（本周合计 ${a.weeklyHours} 小时）`;
       m.link = '/reports';
     } else if (a.kind === 'DAILY_CHASE') {
       const r: any = await agentApi.chaseDaily({ groupIds: a.groupIds ?? [], personIds: a.personIds ?? [] });

@@ -10,7 +10,7 @@
       <div class="pms-title">
         <span class="block-title">成员工作时间安排</span>
         <span class="muted pms-sub">
-          本项目成员的每周固定项目实践时段（周一~周日 × 上午 / 下午 / 晚上）；
+          本项目成员的每周固定项目实践/培训时段（周一~周日 × 上午 / 下午 / 晚上）；
           只有当天勾选了时段，系统才会把他算作「应发日报人员」发提醒。
         </span>
       </div>

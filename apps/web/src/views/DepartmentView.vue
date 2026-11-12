@@ -233,7 +233,7 @@
                 </el-radio-group>
                 <!-- 频率只是「一周内要写几篇」的要求，个人当天该不该写，一律看他的工作时间安排 -->
                 <div class="muted rr-tip rr-freq-tip">
-                  以成员在「工作管理 → 我的工作时间安排」里勾选的项目实践时段为准：当天勾选了时段就算应写日（没勾选的日子不提醒、也不算漏写）。
+                  以成员在「工作管理 → 我的工作时间安排」里勾选的项目实践/培训时段为准：当天勾选了时段就算应写日（没勾选的日子不提醒、也不算漏写）。
                   在此前提下，「每天」= 每个勾选日都要写；「每个工作日」= 再限定周一~周五；「每周N次」= 一周累计够 N 篇即可。
                 </div>
               </el-form-item>
@@ -282,7 +282,7 @@
                   </template>
                 </el-table-column>
                 <!-- 今日实践时段：取自成员在「工作管理 → 我的工作时间安排」里今天的勾选；没勾选的人不算应发日报，不会收到提醒 -->
-                <el-table-column label="今日实践时段" min-width="160" show-overflow-tooltip>
+                <el-table-column label="今日实践/培训时段" min-width="160" show-overflow-tooltip>
                   <template #default="{ row }">
                     <span v-if="row.plannedToday">{{ row.plannedSlots.join('、') }}</span>
                     <span v-else class="muted">未勾选（不提醒）</span>

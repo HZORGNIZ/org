@@ -14,7 +14,7 @@
       <el-tab-pane label="PBC 月计划" name="pbc" />
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
-      <el-tab-pane label="我的工作时间" name="schedule" />
+      <el-tab-pane label="我的工作/培训时间" name="schedule" />
     </el-tabs>
 
     <!-- 日报看板 / 工时统计：整宽面板，不需要右侧栏 -->

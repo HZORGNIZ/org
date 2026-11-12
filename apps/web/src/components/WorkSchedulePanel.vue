@@ -4,7 +4,7 @@
       <div class="wp-title">
         {{ title }}
         <span class="muted wp-sub">
-          勾选每周固定项目实践的时间段；只有当天勾选了时段，系统才会在提醒时间把你当「应发日报人员」催日报。
+          勾选每周固定项目实践/培训的时间段；只有当天勾选了时段，系统才会在提醒时间把你当「应发日报人员」催日报。
         </span>
       </div>
       <div class="wp-actions">
@@ -64,7 +64,7 @@
       </div>
     </div>
     <div class="muted wp-tip">
-      固定三档项目实践时段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
+      固定三档项目实践/培训时段（上午 10:00-12:00 / 下午 14:00-18:00 / 晚上 18:00-20:00），按周循环；改完点「保存安排」长期生效。
       <template v-if="hasDefaultWeekend">
         系统此前为你默认安排了周六/周日的下午与晚上，如不需要可点右上角
         <b>「取消周末默认时段」</b>一键取消（其余勾选不受影响）。
@@ -89,7 +89,7 @@ withDefaults(
     /** 是否显示「去工作管理」入口（首页用） */
     showManageLink?: boolean;
   }>(),
-  { card: true, title: '我的工作时间安排', showManageLink: false },
+  { card: true, title: '我的工作/培训时间安排', showManageLink: false },
 );
 
 const router = useRouter();
