@@ -8,7 +8,7 @@
   >
     <div class="pms-head">
       <div class="pms-title">
-        <span class="block-title">成员工作时间安排</span>
+        <span class="block-title">成员实践/培训时间安排</span>
         <span class="muted pms-sub">
           本项目成员的每周固定项目实践/培训时段（周一~周日 × 上午 / 下午 / 晚上）；
           只有当天勾选了时段，系统才会把他算作「应发日报人员」发提醒。
@@ -197,7 +197,7 @@ async function load() {
   try {
     data.value = await reportsApi.workSlotsBatch(ids);
   } catch {
-    ElMessage.error('成员工作时间加载失败，请刷新重试');
+    ElMessage.error('成员实践/培训时间加载失败，请刷新重试');
   } finally {
     loading.value = false;
   }

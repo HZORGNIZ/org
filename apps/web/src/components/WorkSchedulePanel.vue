@@ -89,7 +89,7 @@ withDefaults(
     /** 是否显示「去工作管理」入口（首页用） */
     showManageLink?: boolean;
   }>(),
-  { card: true, title: '我的工作/培训时间安排', showManageLink: false },
+  { card: true, title: '我的实践/培训时间安排', showManageLink: false },
 );
 
 const router = useRouter();

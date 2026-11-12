@@ -14,7 +14,7 @@
       <el-tab-pane label="PBC 月计划" name="pbc" />
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
-      <el-tab-pane label="我的工作/培训时间" name="schedule" />
+      <el-tab-pane label="我的实践/培训时间" name="schedule" />
       <!-- 待我审核：项目审批 + PBC 计划审批 + PBC 考核评分聚合（仅管理员/部门负责人，成员不展示） -->
       <el-tab-pane v-if="auth.isAdmin || auth.isDeptLeader" label="待我审核" name="review" />
     </el-tabs>
