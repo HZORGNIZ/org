@@ -429,6 +429,16 @@
         </div>
       </template>
       <template v-else>
+        <!-- PBC 红字提醒：上月未自评 / 本月未填写，点击直达工作管理 → PBC 对应月份 -->
+        <template v-if="todoTab === 'todo'">
+          <div v-for="r in pbcReminders" :key="r.key" class="task-row qrow pbc-remind" @click="goPbcRemind(r)">
+            <el-tag type="danger" size="small" effect="plain">PBC</el-tag>
+            <span class="task-title pbc-remind-text">{{ r.label }}</span>
+            <span class="task-ops">
+              <el-button text type="danger" size="small">去处理 →</el-button>
+            </span>
+          </div>
+        </template>
         <div v-if="!todoRows.length" class="muted empty">{{ todoTab === 'todo' ? '当前没有待办任务' : '近 7 天没有已完成的任务' }}</div>
       </template>
       <template v-if="todoTab !== 'review'">
@@ -1300,6 +1310,56 @@ async function load() {
   if (hoursData) hoursStat.value = hoursData;
   // 待审核聚合（项目审批 / PBC）：内部已按角色与权限过滤，成员三来源为空自然不展示入口
   review.load();
+  // PBC 红字提醒（上月未自评 / 本月未填写）：失败静默，不影响首页其他区块
+  loadPbcReminders();
+}
+
+// ---- PBC 红字提醒：上月未自评 / 本月未填写（待办卡顶部，点击直达工作管理 → PBC 对应月份） ----
+type PbcRemind = { key: string; label: string; to: { path: string; query: Record<string, string> } };
+const pbcReminders = ref<PbcRemind[]>([]);
+const pbcRemindMonthLabel = (m: string) => {
+  const [y, mo] = m.split('-');
+  return y && mo ? `${y} 年 ${Number(mo)} 月` : m;
+};
+async function loadPbcReminders() {
+  try {
+    const now = new Date();
+    const fmtM = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const curM = fmtM(now);
+    const prevM = fmtM(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+    const [curRow, prevRow] = await Promise.all([
+      pbcApi.get(curM).catch(() => null),
+      pbcApi.get(prevM).catch(() => null),
+    ]);
+    const out: PbcRemind[] = [];
+    // 上个月：计划已提交/已批但还没自评 → 提醒补自评（自评不限时，历史月随时可补，仅定稿后锁定）
+    if (
+      prevRow &&
+      (prevRow.status === 'SUBMITTED' || prevRow.status === 'APPROVED') &&
+      (prevRow.items?.length ?? 0) > 0 &&
+      prevRow.reviewStatus === 'NOT_STARTED'
+    ) {
+      out.push({
+        key: 'pbc-self-prev',
+        label: `上月（${pbcRemindMonthLabel(prevM)}）PBC 还未自评，自评不限时可随时补录`,
+        to: { path: '/reports', query: { tab: 'pbc', view: 'self', month: prevM } },
+      });
+    }
+    // 本月：还没有 PBC 计划（无记录 / 草稿 / 空事项）→ 提醒填写
+    if (!curRow || curRow.status === 'DRAFT' || !(curRow.items?.length ?? 0)) {
+      out.push({
+        key: 'pbc-plan-cur',
+        label: `本月（${pbcRemindMonthLabel(curM)}）PBC 还未填写，请完成事项与分值并提交审批`,
+        to: { path: '/reports', query: { tab: 'pbc' } },
+      });
+    }
+    pbcReminders.value = out;
+  } catch {
+    pbcReminders.value = [];
+  }
+}
+function goPbcRemind(r: PbcRemind) {
+  router.push(r.to);
 }
 
 // 首页全公司榜单：最近一次有评分的 PBC 排行 + 一卡多页轮播（工时/日报 × 本周/本月）
@@ -1822,6 +1882,17 @@ onMounted(() => {
 }
 .done-at {
   font-size: 12px;
+}
+/* PBC 红字提醒行：上月未自评 / 本月未填写，红字突出 */
+.pbc-remind {
+  background: #fef0f0;
+  border-radius: 6px;
+  padding-left: 6px;
+  cursor: pointer;
+}
+.pbc-remind .pbc-remind-text {
+  color: #d03050;
+  font-weight: 600;
 }
 .task-title {
   flex: 1;

@@ -135,7 +135,7 @@
             placeholder="选择月份"
             :clearable="false"
             class="date-sel"
-            @change="loadPbc"
+            @change="onPbcMonthChange"
           />
           <el-tag :type="PBC_STATUS_TYPE[pbcStatus]" size="small" effect="plain">{{ PBC_STATUS_LABEL[pbcStatus] }}</el-tag>
           <el-tag v-if="showSelfCols" :type="REVIEW_STATUS_TYPE[reviewStatus]" size="small" effect="plain">考核：{{ REVIEW_STATUS_LABEL[reviewStatus] }}</el-tag>
@@ -1089,6 +1089,18 @@ function onViewerChange() {
 
 // ---- PBC（月度个人业务承诺：事项+分值，合计=100） ----
 const pbcMonth = ref(dayjs().format('YYYY-MM'));
+/** 深链指定月份（首页 PBC 提醒 ?tab=pbc&month=YYYY-MM）：合法才采用 */
+const QUERY_MONTH_RE = /^\d{4}-\d{2}$/;
+if (QUERY_MONTH_RE.test(String(route.query.month ?? ''))) pbcMonth.value = String(route.query.month);
+watch(
+  () => route.query.month,
+  (v) => {
+    const s = String(v ?? '');
+    if (!QUERY_MONTH_RE.test(s) || s === pbcMonth.value) return;
+    pbcMonth.value = s;
+    if (tab.value === 'pbc') loadPbc();
+  },
+);
 // 事项行：计划 content/score + 考核阶段逐条自评/上级字段（旧数据无这些字段时视为未评）
 const pbcItems = ref<{ content: string; score: number; selfScore: number | null; selfReason: string | null; leaderScore: number | null; leaderComment: string | null }[]>([]);
 const pbcLoading = ref(false);
@@ -1150,6 +1162,16 @@ function onPbcViewChange(name: any) {
   router.replace({ query: q });
   if (v === 'self' || v === 'plan') loadPbc();
   if (v === 'review') loadReviewPending();
+}
+
+/** 手动切月：清掉地址栏的深链月份（?month=），避免下次从首页提醒进来时月份被旧值顶回 */
+function onPbcMonthChange() {
+  if (route.query.month) {
+    const q = { ...route.query };
+    delete q.month;
+    router.replace({ query: q });
+  }
+  loadPbc();
 }
 
 /** 只查待审核数量（用于页签角标与是否显示「待我审核」） */
