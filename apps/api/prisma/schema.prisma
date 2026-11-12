@@ -493,6 +493,7 @@ model ProjectHardware {
   desc      String? // 说明（是什么/用途）
   status    String   @default("TO_PURCHASE") // TO_PURCHASE 待采购 / PURCHASING 采购中 / PURCHASED_PENDING 已采购待领取 / ASSIGNED 已分配 / RETURNED 已归还
   keeperId  String? // 保管人 userId（新建默认为项目组长/负责人）
+  fee       Float? // 硬件费用（元）；仅系统管理员可见/可改，接口对其他角色一律剥离
   remark    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

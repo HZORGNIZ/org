@@ -244,7 +244,7 @@ export class ProjectsController {
     @Param('id') id: string,
     @CurrentUser() user: CurrentUserPayload,
     @Body()
-    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null; fee?: number | null },
   ) {
     if (user.role !== Role.ADMIN) await this.projects.assertCanManage(id, user.id);
     return this.projects.hardwareCreate(id, user.id, user.role, body ?? {});
@@ -257,7 +257,7 @@ export class ProjectsController {
     @Param('itemId') itemId: string,
     @CurrentUser() user: CurrentUserPayload,
     @Body()
-    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    body: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null; fee?: number | null },
   ) {
     if (user.role !== Role.ADMIN) await this.projects.assertCanManage(id, user.id);
     return this.projects.hardwareUpdate(id, itemId, user.id, user.role, body ?? {});

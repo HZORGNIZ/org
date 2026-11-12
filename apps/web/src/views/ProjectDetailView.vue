@@ -50,7 +50,13 @@
             <span>· {{ displayMembers.length + 1 }} 名成员</span>
             <span>· {{ taskCount }} 个任务</span>
           </div>
-          <div v-if="project.description" class="desc">{{ project.description }}</div>
+          <!-- 项目介绍：超 2 行折叠省略，悬浮显示全文（避免长介绍把头部撑很长） -->
+          <el-tooltip v-if="project.description" :show-after="300" placement="bottom-start" :disabled="!descOverflow">
+            <template #content>
+              <span style="white-space: pre-wrap; display: block; max-width: 420px; max-height: 260px; overflow: auto;">{{ project.description }}</span>
+            </template>
+            <div ref="descEl" class="desc clamped">{{ project.description }}</div>
+          </el-tooltip>
         </div>
         <div class="head-actions">
           <el-button size="small" @click="goDailyTab">项目日报</el-button>
@@ -441,6 +447,7 @@
           :can-manage="canManageSchedule"
           :owner="project?.owner"
           :users="users"
+          :fee-visible="auth.isAdmin"
         />
       </el-tab-pane>
 
@@ -1791,6 +1798,7 @@ onMounted(async () => {
   positions.value = await departmentsApi.positions().catch(() => []);
   departments.value = await departmentsApi.list().catch(() => []);
   load();
+  window.addEventListener('resize', checkDescOverflow);
 });
 
 watch(
@@ -1805,7 +1813,20 @@ watch(
 onUnmounted(() => {
   disposed = true;
   stopPolling();
+  window.removeEventListener('resize', checkDescOverflow);
 });
+
+// ---- 项目介绍折叠检测：超 2 行截断时悬浮显示全文 ----
+const descEl = ref<HTMLElement | null>(null);
+const descOverflow = ref(false);
+function checkDescOverflow() {
+  const el = descEl.value;
+  descOverflow.value = !!el && el.scrollHeight - el.clientHeight > 1;
+}
+watch(
+  () => [route.params.id, project.value?.description],
+  () => nextTick(checkDescOverflow),
+);
 </script>
 
 <style scoped>
@@ -1892,6 +1913,16 @@ onUnmounted(() => {
   color: #606266;
   font-size: 13px;
   margin-top: 4px;
+}
+/* 介绍超 2 行折叠省略，悬浮 el-tooltip 显示全文 */
+.detail-head .desc.clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  cursor: default;
 }
 .detail-grid {
   display: grid;

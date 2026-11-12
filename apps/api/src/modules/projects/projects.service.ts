@@ -2002,18 +2002,23 @@ export class ProjectsService {
       ? await this.prisma.user.findMany({ where: { id: { in: keeperIds } }, select: { id: true, name: true, avatar: true } })
       : [];
     const byId = new Map(keepers.map((u) => [u.id, u]));
+    const feeVisible = role === Role.ADMIN; // 费用仅系统管理员可见，其他角色接口层直接剥离
     return {
       ok: true,
-      items: items.map((i) => ({ ...i, keeper: i.keeperId ? byId.get(i.keeperId) ?? null : null })),
+      feeVisible,
+      items: items.map((i) => {
+        const { fee, ...rest } = i;
+        return { ...rest, keeper: i.keeperId ? byId.get(i.keeperId) ?? null : null, ...(feeVisible ? { fee } : {}) };
+      }),
     };
   }
 
-  /** 新增硬件条目（仅项目负责人/管理员）；保管人不传默认项目组长（负责人） */
+  /** 新增硬件条目（仅项目负责人/管理员）；保管人不传默认项目组长（负责人）；fee 仅管理员传入生效 */
   async hardwareCreate(
     projectId: string,
     userId: string,
     role: string,
-    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null; fee?: number | null },
   ) {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
@@ -2022,23 +2027,23 @@ export class ProjectsService {
     if (!project) throw new NotFoundException('项目不存在');
     if (!project.hasHardware) throw new BadRequestException('本项目未开启硬件资产管理（项目设置 → 硬件资产）');
     if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
-    const row = this.normalizeHardware(data, project.ownerId);
+    const row = this.normalizeHardware(data, project.ownerId, role === Role.ADMIN);
     const created = await this.prisma.projectHardware.create({ data: { projectId, ...row } });
     return { ok: true, item: created };
   }
 
-  /** 修改硬件条目（仅项目负责人/管理员） */
+  /** 修改硬件条目（仅项目负责人/管理员）；非管理员编辑不影响已有费用 */
   async hardwareUpdate(
     projectId: string,
     itemId: string,
     userId: string,
     role: string,
-    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null; fee?: number | null },
   ) {
     const existing = await this.prisma.projectHardware.findUnique({ where: { id: itemId } });
     if (!existing || existing.projectId !== projectId) throw new NotFoundException('硬件条目不存在');
     if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
-    const row = this.normalizeHardware(data, existing.keeperId);
+    const row = this.normalizeHardware(data, existing.keeperId, role === Role.ADMIN);
     const updated = await this.prisma.projectHardware.update({ where: { id: itemId }, data: row });
     return { ok: true, item: updated };
   }
@@ -2052,15 +2057,22 @@ export class ProjectsService {
     return { ok: true };
   }
 
-  /** 硬件入参收敛：名称必填、状态白名单、文本限长；defaultKeeperId 为空时保管人置空 */
+  /** 硬件入参收敛：名称必填、状态白名单、文本限长；defaultKeeperId 为空时保管人置空；fee 仅管理员传入时生效（非管理员更新不触碰已有费用） */
   private normalizeHardware(
-    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null },
+    data: { name?: string; model?: string; desc?: string; status?: string; keeperId?: string | null; remark?: string | null; fee?: number | null },
     defaultKeeperId: string | null,
+    allowFee = false,
   ) {
     const name = String(data?.name ?? '').trim();
     if (!name) throw new BadRequestException('请填写元件名称');
     const status = String(data?.status ?? 'TO_PURCHASE').toUpperCase();
     if (!ProjectsService.HW_STATUS_SET.has(status)) throw new BadRequestException('硬件状态不合法');
+    let fee: number | null | undefined;
+    if (allowFee && data?.fee !== undefined) {
+      const n = Number(data.fee);
+      if (data.fee !== null && (!Number.isFinite(n) || n < 0)) throw new BadRequestException('硬件费用需为不小于 0 的数字');
+      fee = data.fee === null || n === 0 ? null : n;
+    }
     return {
       name: name.slice(0, 60),
       model: data?.model ? String(data.model).trim().slice(0, 80) : null,
@@ -2068,6 +2080,7 @@ export class ProjectsService {
       status,
       keeperId: data?.keeperId ? String(data.keeperId) : defaultKeeperId ?? null,
       remark: data?.remark ? String(data.remark).trim().slice(0, 300) : null,
+      ...(fee !== undefined ? { fee } : {}),
     };
   }
 

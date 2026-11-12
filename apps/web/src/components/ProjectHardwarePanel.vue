@@ -14,6 +14,7 @@
       <el-tag v-for="s in HW_STATUSES" :key="s.value" size="small" :type="s.tag" effect="plain">
         {{ s.label }} {{ countByStatus(s.value) }}
       </el-tag>
+      <el-tag v-if="feeVisible && feeTotal !== null" size="small" type="danger" effect="dark">费用合计 ¥{{ feeTotal }}</el-tag>
     </div>
 
     <div v-if="!items.length" class="muted hw-empty">
@@ -37,6 +38,12 @@
           <el-tag size="small" :type="statusOf(row.status)?.tag ?? 'info'" effect="plain">
             {{ statusOf(row.status)?.label ?? row.status }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="feeVisible" label="费用" width="110" align="right">
+        <template #default="{ row }">
+          <span v-if="row.fee !== null && row.fee !== undefined">¥{{ row.fee }}</span>
+          <span v-else class="muted">-</span>
         </template>
       </el-table-column>
       <el-table-column label="保管人" width="120">
@@ -88,6 +95,9 @@
             </el-select>
           </el-form-item>
         </div>
+        <el-form-item v-if="feeVisible" label="费用（元）">
+          <el-input-number v-model="form.fee" :min="0" :precision="2" :step="100" :controls="false" placeholder="仅系统管理员可见" style="width: 100%" />
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="300" />
         </el-form-item>
@@ -115,8 +125,10 @@ const props = withDefaults(
     owner?: any;
     /** 全员名单（保管人下拉） */
     users?: any[];
+    /** 费用可见（仅系统管理员）：显示费用列/费用输入，非管理员接口层已剥离 */
+    feeVisible?: boolean;
   }>(),
-  { canManage: false, owner: null, users: () => [] },
+  { canManage: false, owner: null, users: () => [], feeVisible: false },
 );
 
 type HwStatus = { value: string; label: string; tag: 'info' | 'warning' | 'primary' | 'success' };
@@ -140,7 +152,14 @@ const form = reactive({
   desc: '',
   status: 'TO_PURCHASE',
   keeperId: '' as string,
+  fee: undefined as number | undefined,
   remark: '',
+});
+
+/** 费用合计（仅管理员可见时计算；无任何费用记录返回 null 不展示） */
+const feeTotal = computed(() => {
+  const sum = items.value.reduce((acc, i) => acc + (typeof i.fee === 'number' ? i.fee : 0), 0);
+  return sum > 0 ? sum : null;
 });
 
 /** 保管人下拉：项目负责人排最前 + 全员 */
@@ -174,6 +193,7 @@ function openForm(row?: any) {
     status: row?.status ?? 'TO_PURCHASE',
     // 新建时保管人默认项目组长；编辑时保留原保管人
     keeperId: row?.keeperId ?? props.owner?.id ?? '',
+    fee: props.feeVisible ? (row?.fee ?? undefined) : undefined,
     remark: row?.remark ?? '',
   });
   formVisible.value = true;
@@ -185,7 +205,7 @@ async function save() {
     return;
   }
   saving.value = true;
-  const payload = {
+  const payload: Record<string, any> = {
     name: form.name.trim(),
     model: form.model.trim() || null,
     desc: form.desc.trim() || null,
@@ -193,6 +213,8 @@ async function save() {
     keeperId: form.keeperId || null,
     remark: form.remark.trim() || null,
   };
+  // 费用仅管理员可见/可传；非管理员不带 fee 字段，后端也不接受
+  if (props.feeVisible) payload.fee = form.fee ?? null;
   try {
     if (editing.value) await projectsApi.hardwareUpdate(props.projectId, editing.value.id, payload);
     else await projectsApi.hardwareCreate(props.projectId, payload as any);
