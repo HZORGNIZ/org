@@ -15,6 +15,8 @@
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
       <el-tab-pane label="我的工作/培训时间" name="schedule" />
+      <!-- 待我审核：项目审批 + PBC 计划审批 + PBC 考核评分聚合（仅管理员/部门负责人，成员不展示） -->
+      <el-tab-pane v-if="auth.isAdmin || auth.isDeptLeader" label="待我审核" name="review" />
     </el-tabs>
 
     <!-- 日报看板 / 工时统计：整宽面板，不需要右侧栏 -->
@@ -23,6 +25,9 @@
 
     <!-- 我的工作时间：整宽 TAB（原右栏卡片迁入，首页也复用同一组件） -->
     <WorkSchedulePanel v-else-if="tab === 'schedule'" :show-manage-link="false" />
+
+    <!-- 待我审核：项目审批 / PBC 计划审批 / PBC 考核评分聚合清单，点行直达对应审核入口 -->
+    <PendingReviewPanel v-else-if="tab === 'review'" @jump="onReviewJump" />
 
     <!-- 日报 / 周报 / PBC：左侧填写 + 历史文档（原右栏工作时间已改为独立 TAB） -->
     <div v-else>
@@ -726,6 +731,7 @@ import PbcReviewPanel from '../components/PbcReviewPanel.vue';
 import PbcResultCard from '../components/PbcResultCard.vue';
 import ReportsStatsPanel from '../components/ReportsStatsPanel.vue';
 import WorkSchedulePanel from '../components/WorkSchedulePanel.vue';
+import PendingReviewPanel from '../components/PendingReviewPanel.vue';
 import ReportDoc from '../components/ReportDoc.vue';
 import type { DocDay, DocTag } from '../components/report-doc';
 
@@ -735,8 +741,8 @@ const route = useRoute();
 
 // ---- 大 tab（日报 / 周报 / PBC / 日报看板 / 工时统计）----
 // 前三个 tab 直接驱动下面的 type（写卡内部仍按 DAILY/WEEKLY/PBC 分支渲染）；board/hours 内嵌日报看板与工时统计面板
-type TabKey = 'daily' | 'weekly' | 'pbc' | 'board' | 'hours' | 'schedule';
-const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'board', 'hours', 'schedule'];
+type TabKey = 'daily' | 'weekly' | 'pbc' | 'board' | 'hours' | 'schedule' | 'review';
+const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'board', 'hours', 'schedule', 'review'];
 const TAB_TYPE: Record<string, 'DAILY' | 'WEEKLY' | 'PBC' | undefined> = {
   daily: 'DAILY',
   weekly: 'WEEKLY',
@@ -1491,6 +1497,27 @@ function goReview() {
   viewerMode.value = 'me';
   pbcView.value = 'review';
   onPbcViewChange('review');
+}
+
+/** 「待我审核」聚合面板跳转：项目去详情页；PBC 计划切团队视角的计划视图；PBC 考核切复核工作台 */
+function onReviewJump(payload: { kind: 'project' | 'pbc-plan' | 'pbc-review'; id?: string }) {
+  if (payload.kind === 'project') {
+    if (payload.id) router.push('/projects/' + payload.id);
+    return;
+  }
+  if (payload.kind === 'pbc-plan') {
+    tab.value = 'pbc';
+    type.value = 'PBC';
+    viewerMode.value = 'team';
+    pbcView.value = 'plan';
+    router.replace({ query: { tab: 'pbc' } });
+    loadPbcTeam();
+    return;
+  }
+  if (payload.kind === 'pbc-review') {
+    onTabChange('pbc');
+    goReview();
+  }
 }
 // PBC 查看/审批弹窗（团队行点击弹出，满足“查看他人 PBC 用弹窗”）
 const pbcDlgVisible = ref(false);

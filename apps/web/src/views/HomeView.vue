@@ -409,10 +409,29 @@
           <!-- 点「已完成」后任务会从待办列表消失，没个去处用户会以为被删了：给一个近 7 天完成的页签 -->
           <button class="tt" :class="{ on: todoTab === 'todo' }" @click="todoTab = 'todo'">待办 {{ my.todo.length }}</button>
           <button v-if="my.done.length" class="tt" :class="{ on: todoTab === 'done' }" @click="todoTab = 'done'">近 7 天完成 {{ my.done.length }}</button>
+          <!-- 待审核：项目审批 + PBC 计划/考核，有内容才显示页签（成员没有可审内容 → 自然隐藏） -->
+          <button v-if="review.total.value" class="tt tt-review" :class="{ on: todoTab === 'review' }" @click="todoTab = 'review'">
+            待审核 {{ review.total.value }}
+          </button>
           <el-button text type="primary" size="small" @click="$router.push('/tasks')">全部任务 →</el-button>
         </div>
       </div>
-      <div v-if="!todoRows.length" class="muted empty">{{ todoTab === 'todo' ? '当前没有待办任务' : '近 7 天没有已完成的任务' }}</div>
+      <!-- 待审核页签内容：三来源统一行，点击直达审核入口 -->
+      <template v-if="todoTab === 'review'">
+        <div v-if="!reviewRows.length" class="muted empty">没有待审核的内容</div>
+        <div v-for="row in reviewRows" :key="row.key" class="task-row qrow" @click="goReviewItem(row)">
+          <el-tag :type="row.tagType as any" size="small" effect="plain">{{ row.tagText }}</el-tag>
+          <span class="task-title ellipsis">{{ row.title }}</span>
+          <span class="muted">{{ row.meta }}</span>
+          <span class="task-ops">
+            <el-button text type="primary" size="small">{{ row.kind === 'pbc-review' ? '去评分 →' : '去审批 →' }}</el-button>
+          </span>
+        </div>
+      </template>
+      <template v-else>
+        <div v-if="!todoRows.length" class="muted empty">{{ todoTab === 'todo' ? '当前没有待办任务' : '近 7 天没有已完成的任务' }}</div>
+      </template>
+      <template v-if="todoTab !== 'review'">
       <TaskUpdatePopover v-for="t in todoRows" :key="t.id" :task="t" @open="openTask(t.id)">
         <div class="task-row qrow" @click="openTask(t.id)">
           <el-tag :type="TASK_STATUS[t.status]?.type" size="small">{{ TASK_STATUS[t.status]?.label }}</el-tag>
@@ -450,6 +469,7 @@
           </span>
         </div>
       </TaskUpdatePopover>
+      </template>
       <div v-if="todoTab === 'todo' && my.hidden" class="muted todo-hidden">另有 {{ my.hidden }} 条任务在已放进回收站的项目里，不计入待办（恢复项目后可见）</div>
     </div>
     </div>
@@ -535,6 +555,7 @@ import { announcementsApi, departmentsApi, intakeApi, projectsApi, reportsApi, t
 import { useAuthStore } from '../stores/auth';
 import { TASK_PRIORITY, TASK_STATUS, fmt, isUpdateToday, timeAgo, updateDate } from '../utils/format';
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
+import { usePendingReview } from '../utils/usePendingReview';
 import MarkdownView from '../components/MarkdownView.vue';
 import HomeRankCard from '../components/HomeRankCard.vue';
 import HomeRankRotator from '../components/HomeRankRotator.vue';
@@ -1097,9 +1118,52 @@ function openTask(id: string) {
 }
 
 // ---- 我的待办快捷操作：不打开详情就能直接标完成 / 开始 / 重新打开 / 改截止时间 ----
-/** 当前页签：待办 or 近 7 天已完成（后端 myTasks 早已返回 done，之前首页没展示，标完成后任务就“消失”了） */
-const todoTab = ref<'todo' | 'done'>('todo');
+/** 当前页签：待办 / 近 7 天完成 / 待审核（待审核仅在有内容时显示，普通成员三个审核来源都为空 → 不展示） */
+const todoTab = ref<'todo' | 'done' | 'review'>('todo');
 const todoRows = computed(() => (todoTab.value === 'done' ? my.value.done : my.value.todo).slice(0, 8));
+
+// ---- 待审核聚合（项目审批 / PBC 计划审批 / PBC 考核评分）：数据随 load() 一起刷新 ----
+const review = usePendingReview();
+/** 待审核页签行：把三个来源压平成统一行结构，点击直达审核入口 */
+const reviewRows = computed(() => [
+  ...review.projects.value.map((p: any) => ({
+    key: 'p-' + p.id,
+    kind: 'project' as const,
+    id: p.id,
+    tagText: '项目',
+    tagType: 'primary',
+    title: p.name,
+    meta: `${p.owner?.name || ''} 申请 · ${fmt(p.approvalSubmittedAt, 'MM-DD HH:mm')} 提交`,
+  })),
+  ...review.pbcPlans.value.map((r: any) => ({
+    key: 'plan-' + r.userId + '-' + r.month,
+    kind: 'pbc-plan' as const,
+    tagText: 'PBC 计划',
+    tagType: 'warning',
+    title: r.name,
+    meta: `${r.month} · 计划 ${r.total} 分 · 等待审批`,
+  })),
+  ...review.pbcScores.value.map((r: any) => ({
+    key: 'score-' + r.userId + '-' + r.month,
+    kind: 'pbc-review' as const,
+    tagText: 'PBC 考核',
+    tagType: 'success',
+    title: r.name,
+    meta: `${r.month} · 已自评 ${r.selfTotal ?? '—'} 分 · 等待复核`,
+  })),
+]);
+
+/** 跳去审核：项目进详情页；PBC 计划/考核进工作管理对应视图（review 深链已支持自动切「我的」视角） */
+function goReviewItem(row: (typeof reviewRows.value)[number]) {
+  if (row.kind === 'project' && row.id) {
+    router.push('/projects/' + row.id);
+  } else if (row.kind === 'pbc-plan') {
+    router.push({ path: '/reports', query: { tab: 'pbc', view: 'plan' } });
+  } else {
+    router.push({ path: '/reports', query: { tab: 'pbc', view: 'review' } });
+  }
+}
+
 /** 当前正在提交的任务 id（同一时间只允许一条，避免连点） */
 const busyTask = ref('');
 
@@ -1234,6 +1298,8 @@ async function load() {
   allMeetings.value = Array.isArray(meetingsData) ? meetingsData : [];
   boardMeetings.value = Array.isArray(boardData) ? boardData : [];
   if (hoursData) hoursStat.value = hoursData;
+  // 待审核聚合（项目审批 / PBC）：内部已按角色与权限过滤，成员三来源为空自然不展示入口
+  review.load();
 }
 
 // 首页全公司榜单：最近一次有评分的 PBC 排行 + 一卡多页轮播（工时/日报 × 本周/本月）
@@ -1743,6 +1809,16 @@ onMounted(() => {
   color: var(--app-brand-ink, #409eff);
   background: #f0f6ff;
   font-weight: 600;
+}
+/* 待审核页签：有可审内容时用红色提醒，与普通任务页签区分 */
+.todo-tabs .tt-review {
+  border-color: #f3d4d0;
+  color: #d03050;
+}
+.todo-tabs .tt-review.on {
+  border-color: #d03050;
+  color: #d03050;
+  background: #fef0f0;
 }
 .done-at {
   font-size: 12px;
