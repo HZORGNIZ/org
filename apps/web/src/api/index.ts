@@ -914,13 +914,14 @@ export type DocSpaceScope = 'department' | 'project';
 export type DocConflictPolicy = 'version' | 'overwrite' | 'rename';
 
 export const documentsApi = {
-  /** 空间列表：当前文件夹下的子文件夹与文件（keyword 有值时为全空间搜索） */
-  space: (params: { scope: DocSpaceScope; targetId: string; folderId?: string | null; keyword?: string }) =>
+  /** 空间列表：当前文件夹下的子文件夹与文件（keyword 有值时为全空间搜索；docType 为类型筛选，同样跨文件夹） */
+  space: (params: { scope: DocSpaceScope; targetId: string; folderId?: string | null; keyword?: string; docType?: string }) =>
     api.get<any>('/documents/space', {
       scope: params.scope,
       targetId: params.targetId,
       folderId: params.folderId || undefined,
       keyword: params.keyword || undefined,
+      docType: params.docType || undefined,
     }),
   breadcrumb: (folderId: string) => api.get<{ id: string; name: string }[]>(`/documents/breadcrumb/${folderId}`),
   /** 上传前重名探测：{ exists, file } */
@@ -946,6 +947,7 @@ export const documentsApi = {
       externalPassword?: string;
       externalValidDays?: number;
       note?: string;
+      docType?: string;
       conflict?: DocConflictPolicy;
     },
     onProgress?: (percent: number) => void,
@@ -959,6 +961,7 @@ export const documentsApi = {
     if (data.externalPassword) fd.append('externalPassword', data.externalPassword);
     if (data.externalValidDays != null) fd.append('externalValidDays', String(data.externalValidDays));
     if (data.note) fd.append('note', data.note);
+    if (data.docType) fd.append('docType', data.docType);
     if (data.conflict) fd.append('conflict', data.conflict);
     return http.post<any, any>('/documents/upload', fd, {
       timeout: 0,
@@ -981,7 +984,7 @@ export const documentsApi = {
     api.patch<any>(`/documents/files/${id}/content`, { html, note }),
   patchFile: (
     id: string,
-    data: { name?: string; note?: string | null; visibility?: string; externalPassword?: string; externalValidDays?: number | null; folderId?: string | null },
+    data: { name?: string; note?: string | null; docType?: string | null; visibility?: string; externalPassword?: string; externalValidDays?: number | null; folderId?: string | null },
   ) => api.patch<any>(`/documents/files/${id}`, data),
   removeFile: (id: string) => api.del(`/documents/files/${id}`),
   versions: (id: string) => api.get<{ current: number; canManage: boolean; versions: any[] }>(`/documents/files/${id}/versions`),

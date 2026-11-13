@@ -28,13 +28,26 @@
         <el-input
           v-model="keyword"
           size="small"
-          placeholder="搜索文件名/备注"
+          placeholder="搜索文件名/类型/备注"
           clearable
-          style="width: 150px"
+          style="width: 140px"
           @keyup.enter="search"
           @clear="search"
         />
-        <el-select v-model="visibility" size="small" style="width: 150px" :disabled="!!keyword">
+        <!-- 类型筛选：按文档类型跨文件夹收敛列表（找「所有技术方案」这类文档） -->
+        <el-select
+          v-model="filterDocType"
+          size="small"
+          placeholder="全部类型"
+          clearable
+          filterable
+          style="width: 112px"
+          title="按文档类型筛选（跨文件夹）"
+          @change="load"
+        >
+          <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
+        </el-select>
+        <el-select v-model="visibility" size="small" style="width: 132px" :disabled="!!keyword">
           <el-option
             v-for="o in visOptions"
             :key="o.value"
@@ -42,7 +55,22 @@
             :value="o.value"
           />
         </el-select>
-        <el-input v-model="uploadNote" size="small" placeholder="备注（可选）" style="width: 130px" maxlength="200" />
+        <!-- 上传类型：给本次上传的文件打类型，可直接输入自定义类型 -->
+        <el-select
+          v-model="uploadDocType"
+          size="small"
+          placeholder="上传类型"
+          clearable
+          filterable
+          allow-create
+          default-first-option
+          :disabled="!!keyword"
+          style="width: 118px"
+          title="给本次上传的文件打类型（可输入自定义类型）"
+        >
+          <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
+        </el-select>
+        <el-input v-model="uploadNote" size="small" placeholder="备注（可选）" style="width: 100px" maxlength="200" />
         <el-button
           v-if="scope === 'project'"
           size="small"
@@ -76,7 +104,7 @@
     </div>
 
     <!-- 文件夹 -->
-    <div v-if="folders.length && !keyword" class="ds-folders">
+    <div v-if="folders.length && !keyword && !filterDocType" class="ds-folders">
       <div v-for="f in folders" :key="f.id" class="ds-folder" @click="goFolder(f.id)">
         <el-icon class="ds-folder-icon"><Folder /></el-icon>
         <span class="ellipsis ds-folder-name">{{ f.name }}</span>
@@ -95,7 +123,7 @@
 
     <!-- 文件列表 -->
     <el-table :data="files" v-loading="loading" size="small" class="ds-table" empty-text="还没有文件，把文件拖到这里即可上传">
-      <el-table-column label="名称" min-width="230">
+      <el-table-column label="名称" min-width="200">
         <template #default="{ row }">
           <div class="ds-name">
             <el-icon class="ds-name-icon"><Document /></el-icon>
@@ -105,7 +133,26 @@
               {{ approvalTag(row.approval)!.label }}
             </el-tag>
           </div>
-          <div v-if="keyword && row.folder" class="muted ds-name-path">位于：{{ row.folder.name }}</div>
+          <div v-if="(keyword || filterDocType) && row.folder" class="muted ds-name-path">位于：{{ row.folder.name }}</div>
+        </template>
+      </el-table-column>
+      <!-- 文档类型：有管理权时点标签直接改（下拉含预置+已用类型），更多菜单里可输入自定义类型 -->
+      <el-table-column label="类型" width="116">
+        <template #default="{ row }">
+          <el-dropdown v-if="row.canManage" trigger="click" size="small" @command="(t: string) => setDocType(row, t)">
+            <span class="ds-type-cell" :title="row.docType ? '点击修改文档类型' : '点击设置文档类型'">
+              <el-tag size="small" effect="plain" :type="docTypeMeta(row.docType).color">{{ docTypeMeta(row.docType).label }}</el-tag>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="">未分类</el-dropdown-item>
+                <el-dropdown-item v-for="t in typeOptions" :key="t" :command="t">
+                  {{ t }}<span v-if="t === row.docType" class="ds-type-cur">✓</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-tag v-else size="small" effect="plain" :type="docTypeMeta(row.docType).color">{{ docTypeMeta(row.docType).label }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="大小" width="92">
@@ -117,7 +164,7 @@
       <el-table-column label="上传时间" width="118">
         <template #default="{ row }">{{ fmtShort(row.updatedAt) }}</template>
       </el-table-column>
-      <el-table-column label="备注" min-width="120">
+      <el-table-column label="备注" min-width="100">
         <template #default="{ row }">
           <span v-if="row.note" class="ds-note-txt" :title="row.note">{{ row.note }}</span>
           <span v-else class="muted">—</span>
@@ -140,6 +187,7 @@
                 <el-dropdown-item command="versions">版本历史</el-dropdown-item>
                 <el-dropdown-item command="rename">重命名</el-dropdown-item>
                 <el-dropdown-item command="note">编辑备注</el-dropdown-item>
+                <el-dropdown-item command="docType">设置文档类型</el-dropdown-item>
                 <el-dropdown-item command="move">移动到文件夹</el-dropdown-item>
                 <el-dropdown-item command="visibility">修改可见范围</el-dropdown-item>
                 <el-dropdown-item v-if="row.canManage" command="delete" divided>删除文件</el-dropdown-item>
@@ -183,6 +231,22 @@
         </el-form-item>
         <el-form-item v-if="sheet.kind === 'note'" label="备注">
           <el-input v-model="sheet.note" type="textarea" :rows="3" maxlength="200" placeholder="留空则清除备注" />
+        </el-form-item>
+        <el-form-item v-if="sheet.kind === 'docType'" label="文档类型">
+          <el-select
+            v-model="sheet.docType"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="选择或输入类型"
+            style="width: 100%"
+          >
+            <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
+          </el-select>
+          <div class="ds-hint" style="margin-top: 6px">
+            预置：{{ DOC_TYPE_NAMES.join(' / ') }}。需要新类型时直接输入（不超过 {{ DOC_TYPE_MAX_LEN }} 个字），之后会出现在下拉里；留空表示未分类。
+          </div>
         </el-form-item>
         <el-form-item v-if="sheet.kind === 'visibility'" label="可见范围">
           <el-radio-group v-model="sheet.visibility">
@@ -336,6 +400,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { documentsApi, type DocConflictPolicy, type DocSpaceScope } from '../api';
 import { FILE_APPROVAL, FILE_VIS, fmt, fmtShort, formatBytes } from '../utils/format';
+import { DOC_TYPE_MAX_LEN, DOC_TYPE_NAMES, docTypeMeta, docTypeOptions } from '../utils/doc-types';
 
 const props = defineProps<{ scope: DocSpaceScope; targetId: string }>();
 
@@ -351,6 +416,12 @@ const dragActive = ref(false);
 /** 新上传文件的默认可见范围与备注 */
 const visibility = ref<string>('');
 const uploadNote = ref('');
+/** 上传时给文件打的类型（空 = 未分类）；filterDocType 是列表筛选条件，两者互不影响 */
+const uploadDocType = ref('');
+const filterDocType = ref('');
+
+/** 类型下拉：预置词表 + 本空间已用过的自定义类型 */
+const typeOptions = computed(() => docTypeOptions(files.value.map((f: any) => f.docType)));
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const editorRef = ref<HTMLDivElement | null>(null);
@@ -406,11 +477,13 @@ async function load() {
       targetId: props.targetId,
       folderId: folderId.value,
       keyword: keyword.value,
+      docType: filterDocType.value || undefined,
     });
     space.value = data;
     folders.value = data.folders || [];
     files.value = data.files || [];
-    crumbs.value = keyword.value ? [] : folderId.value ? await documentsApi.breadcrumb(folderId.value) : [];
+    crumbs.value =
+      keyword.value || filterDocType.value ? [] : folderId.value ? await documentsApi.breadcrumb(folderId.value) : [];
   } finally {
     loading.value = false;
   }
@@ -419,6 +492,8 @@ async function load() {
 function goFolder(id: string | null) {
   folderId.value = id;
   keyword.value = '';
+  // 进入文件夹是「正常浏览」动作，清掉类型筛选，避免列表与面包屑语义打架
+  filterDocType.value = '';
   load();
 }
 
@@ -556,6 +631,8 @@ async function enqueue(list: File[]) {
       ElMessage.success(`已上传 ${done} 个文件`);
     }
     uploadNote.value = '';
+    // 上传后回到「全部类型」，否则新文件若不在当前筛选类型里会像没上传成功
+    filterDocType.value = '';
     await load();
   }
 }
@@ -574,6 +651,7 @@ async function uploadOne(file: File, policy: DocConflictPolicy, extPwd = '', ext
         externalPassword: visibility.value === 'EXTERNAL' ? extPwd : undefined,
         externalValidDays: visibility.value === 'EXTERNAL' ? extDays : undefined,
         note: uploadNote.value.trim() || undefined,
+        docType: uploadDocType.value.trim() || undefined,
         conflict: policy,
       },
       (pct) => {
@@ -696,11 +774,12 @@ function saveBlob(blob: Blob, name: string) {
 // ---------------- 文件操作 ----------------
 const sheet = reactive({
   visible: false,
-  kind: 'rename' as 'rename' | 'note' | 'visibility' | 'move',
+  kind: 'rename' as 'rename' | 'note' | 'docType' | 'visibility' | 'move',
   title: '',
   id: '',
   name: '',
   note: '',
+  docType: '',
   visibility: '',
   oldVisibility: '',
   externalPassword: '',
@@ -735,8 +814,20 @@ async function loadFolderChoices() {
   folderChoices.value = out;
 }
 
-async function fileCommand(cmd: string, row: any) {
-  if (cmd === 'delete') {
+/** 行内改文档类型：只改该行数据，避免整表重新加载导致滚动位置跳动 */
+async function setDocType(row: any, t: string) {
+  const docType = String(t ?? '').trim();
+  if ((row.docType || '') === docType) return;
+  try {
+    await documentsApi.patchFile(row.id, { docType: docType || null });
+    row.docType = docType || null;
+    ElMessage.success(docType ? `已设为「${docType}」` : '已设为未分类');
+  } catch {
+    // 失败提示由请求拦截器统一弹出，这里不再重复
+  }
+}
+
+async function fileCommand(cmd: string, row: any) {  if (cmd === 'delete') {
     try {
       await ElMessageBox.confirm(
         `删除「${row.name}」？该文件的全部历史版本会一并删除，不可恢复。`,
@@ -771,9 +862,18 @@ async function fileCommand(cmd: string, row: any) {
   sheet.kind = cmd as any;
   sheet.id = row.id;
   sheet.title =
-    cmd === 'rename' ? '重命名文件' : cmd === 'note' ? '编辑备注' : cmd === 'visibility' ? '修改可见范围' : '移动到文件夹';
+    cmd === 'rename'
+      ? '重命名文件'
+      : cmd === 'note'
+        ? '编辑备注'
+        : cmd === 'docType'
+          ? '设置文档类型'
+          : cmd === 'visibility'
+            ? '修改可见范围'
+            : '移动到文件夹';
   sheet.name = row.name;
   sheet.note = row.note || '';
+  sheet.docType = row.docType || '';
   sheet.visibility = row.visibility;
   sheet.oldVisibility = row.visibility;
   sheet.externalPassword = '';
@@ -799,6 +899,13 @@ async function saveSheet() {
       await documentsApi.patchFile(sheet.id, { name });
     } else if (sheet.kind === 'note') {
       await documentsApi.patchFile(sheet.id, { note: sheet.note.trim() || null });
+    } else if (sheet.kind === 'docType') {
+      const docType = String(sheet.docType ?? '').trim();
+      if (docType.length > DOC_TYPE_MAX_LEN) {
+        ElMessage.warning(`文档类型不超过 ${DOC_TYPE_MAX_LEN} 个字`);
+        return;
+      }
+      await documentsApi.patchFile(sheet.id, { docType: docType || null });
     } else if (sheet.kind === 'visibility') {
       const enteringExt = sheet.visibility === 'EXTERNAL' && sheet.oldVisibility !== 'EXTERNAL';
       if (enteringExt && sheet.externalPassword.trim().length < 4) {
@@ -1090,6 +1197,19 @@ defineExpose({ reload: load });
 .ds-name-path {
   font-size: 12px;
   margin-top: 2px;
+}
+/* 类型标签：可点击改类型时给手势；行高收紧避免类型列把行撑高 */
+.ds-type-cell {
+  display: inline-block;
+  cursor: pointer;
+}
+.ds-type-cell .el-tag,
+.ds-table .el-tag {
+  cursor: inherit;
+}
+.ds-type-cur {
+  margin-left: 6px;
+  color: var(--app-brand-ink, #409eff);
 }
 .ds-note-txt {
   font-size: 12px;

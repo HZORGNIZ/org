@@ -10,6 +10,7 @@ import { writeAccessLog, type AccessAction } from '../../common/access-log';
 import { FilesService } from '../files/files.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { buildDocxFromHtml, docxToHtml, isEditableDocx } from './docx.util';
+import { normalizeDocType } from '../../common/doc-types';
 
 /** 操作人（含部门上下文，由 controller 从 JWT 载荷传入） */
 export type SpaceUser = { id: string; role: string; departmentId?: string | null; name?: string };
@@ -228,21 +229,31 @@ export class DocumentsService {
   /** 文档空间：当前层级文件夹 + 文件（含上传时间/上传者/大小/备注/可见范围/版本/可编辑与可管理标记） */
   async space(
     user: SpaceUser,
-    query: { scope: SpaceScope; targetId: string; folderId?: string; keyword?: string },
+    query: { scope: SpaceScope; targetId: string; folderId?: string; keyword?: string; docType?: string },
   ) {
     const sp = await this.resolveSpace(user, query.scope, query.targetId);
     const keyword = query.keyword?.trim();
-    const folderWhere: Prisma.DocumentFileWhereInput = keyword
-      ? {}
-      : { folderId: query.folderId ?? null };
+    // 类型筛选与关键字可叠加：类型走精确匹配（字典是固定词），关键字同时命中文件名/备注/类型
+    const docType = normalizeDocType(query.docType);
+    // 关键字/类型筛选时跨文件夹检索（否则只在当前层级找，用户会以为文件丢了）
+    const folderWhere: Prisma.DocumentFileWhereInput = keyword || docType ? {} : { folderId: query.folderId ?? null };
     const files = await this.prisma.documentFile.findMany({
       where: {
         AND: [
           this.spaceWhere(sp),
           this.visibleWhere(user),
           folderWhere,
+          ...(docType ? [{ docType } as Prisma.DocumentFileWhereInput] : []),
           ...(keyword
-            ? [{ OR: [{ name: { contains: keyword } }, { note: { contains: keyword } }] } as Prisma.DocumentFileWhereInput]
+            ? [
+                {
+                  OR: [
+                    { name: { contains: keyword } },
+                    { note: { contains: keyword } },
+                    { docType: { contains: keyword } },
+                  ],
+                } as Prisma.DocumentFileWhereInput,
+              ]
             : []),
         ],
       },
@@ -254,7 +265,10 @@ export class DocumentsService {
       take: 500,
     });
     const folders = await this.prisma.documentFolder.findMany({
-      where: { ...(sp.projectId ? { projectId: sp.projectId } : { departmentId: sp.departmentId }), parentId: keyword ? undefined : query.folderId ?? null },
+      where: {
+        ...(sp.projectId ? { projectId: sp.projectId } : { departmentId: sp.departmentId }),
+        parentId: keyword || docType ? undefined : query.folderId ?? null,
+      },
       select: {
         id: true,
         name: true,
@@ -415,6 +429,7 @@ export class DocumentsService {
       externalPassword?: string;
       externalValidDays?: number | string;
       note?: string;
+      docType?: string | null;
       conflict?: ConflictPolicy;
     },
   ) {
@@ -424,6 +439,9 @@ export class DocumentsService {
     const size = Number(input.size);
     if (!(size > 0)) throw new BadRequestException('空文件不可上传');
     if (input.folderId) await this.assertFolderInSpace(input.folderId, sp);
+
+    // 文档类型：上传时可打标（同名重传也允许改类型），空表示「未分类」
+    const docType = normalizeDocType(input.docType);
 
     const visibility = this.normalizeVisibility(input.visibility, sp);
     const externalPassword = await this.hashExternalPassword(visibility, input.externalPassword);
@@ -443,13 +461,14 @@ export class DocumentsService {
     });
 
     const run = async () => {
-      if (existing && policy === 'overwrite') return this.overwriteFile(user, existing, input, visibility, input.note, externalPassword, externalExpiresAt);
+      if (existing && policy === 'overwrite')
+        return this.overwriteFile(user, existing, input, visibility, input.note, externalPassword, externalExpiresAt, docType);
       if (existing && policy === 'rename') {
         const uniq = await this.uniqueName(sp, input.folderId ?? null, name);
-        return this.createFile(user, sp, input, uniq, visibility, input.note, externalPassword, externalExpiresAt);
+        return this.createFile(user, sp, input, uniq, visibility, input.note, externalPassword, externalExpiresAt, docType);
       }
-      if (existing) return this.addVersion(user, existing, input, '同名重新上传');
-      return this.createFile(user, sp, input, name, visibility, input.note, externalPassword, externalExpiresAt);
+      if (existing) return this.addVersion(user, existing, input, '同名重新上传', docType);
+      return this.createFile(user, sp, input, name, visibility, input.note, externalPassword, externalExpiresAt, docType);
     };
 
     if (!input.path) return decorate(await run());
@@ -526,6 +545,7 @@ export class DocumentsService {
     note?: string,
     externalPassword?: string | null,
     externalExpiresAt?: Date | null,
+    docType?: string | null,
   ) {
     const mimeType = input.mimeType || guessMime(name);
     const key = await this.store(name, mimeType, input);
@@ -541,6 +561,7 @@ export class DocumentsService {
         projectId: sp.projectId,
         uploaderId: user.id,
         note: note?.trim() || null,
+        docType: docType ?? null,
         visibility,
         approval,
         externalPassword: externalPassword ?? null,
@@ -566,9 +587,10 @@ export class DocumentsService {
   /** 同名保留版本：追加新版本快照，当前指针前移 */
   private async addVersion(
     user: SpaceUser,
-    existing: { id: string; name: string; version: number },
+    existing: { id: string; name: string; version: number; docType: string | null },
     input: { mimeType: string; size: number; path?: string; buffer?: Buffer; folderId?: string },
     note?: string,
+    docType?: string | null,
   ) {
     const mimeType = input.mimeType || guessMime(existing.name);
     const key = await this.store(existing.name, mimeType, input);
@@ -580,6 +602,8 @@ export class DocumentsService {
         mimeType,
         size: input.size,
         version,
+        // 重传时选了类型就以新选择为准，未选则保留原分类，避免升级版本丢分类
+        ...(docType !== null && docType !== undefined ? { docType } : {}),
         versions: {
           create: { version, fileKey: key, mimeType, size: input.size, note: note ?? null, uploaderId: user.id },
         },
@@ -592,12 +616,13 @@ export class DocumentsService {
   /** 同名删除历史版本：清掉旧版本对象与快照，内容替换为 v1 */
   private async overwriteFile(
     user: SpaceUser,
-    existing: { id: string; name: string; version: number; note: string | null },
+    existing: { id: string; name: string; version: number; note: string | null; docType: string | null },
     input: { mimeType: string; size: number; path?: string; buffer?: Buffer; folderId?: string },
     visibility: FileVisibility,
     note?: string,
     externalPassword?: string | null,
     externalExpiresAt?: Date | null,
+    docType?: string | null,
   ) {
     const oldVersions = await this.prisma.documentFileVersion.findMany({
       where: { fileId: existing.id },
@@ -619,6 +644,7 @@ export class DocumentsService {
         externalPassword: externalPassword ?? null,
         externalExpiresAt: externalExpiresAt ?? null,
         note: note !== undefined ? note.trim() || null : existing.note,
+        ...(docType !== null && docType !== undefined ? { docType } : {}),
         versions: {
           create: { version: 1, fileKey: key, mimeType, size: input.size, note: '覆盖上传（历史版本已删除）', uploaderId: user.id },
         },
@@ -677,6 +703,7 @@ export class DocumentsService {
     data: {
       name?: string;
       note?: string | null;
+      docType?: string | null;
       visibility?: FileVisibility;
       externalPassword?: string;
       externalValidDays?: number | string | null;
@@ -710,6 +737,8 @@ export class DocumentsService {
       patch.name = name;
     }
     if (data.note !== undefined) patch.note = data.note?.trim() || null;
+    // 传入即改（空字符串/null 表示清空分类 → 未分类）
+    if (data.docType !== undefined) patch.docType = normalizeDocType(data.docType);
     if (data.folderId !== undefined) {
       if (data.folderId === null) {
         patch.folder = { disconnect: true };

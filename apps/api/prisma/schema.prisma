@@ -1067,6 +1067,7 @@ model KnowledgeDoc {
   departmentId String? // 部门文档所属部门
   title        String
   content      String // Markdown 正文
+  docType      String? // 文档类型（与文件空间共用同一套类型字典）
   visibility   DocVisibility @default(PUBLIC)
   authorId     String
   updatedById  String?
@@ -1155,6 +1156,8 @@ model DocumentFile {
   projectId    String? // 项目空间
   uploaderId   String
   note         String? // 备注信息
+  // 文档类型（产品需求文档/硬件清单/功能清单/技术方案/开发提示词/接线文档/其他；允许 ≤12 字自定义扩展）
+  docType      String?
   visibility   FileVisibility @default(PRIVATE)
   approval     FileApproval   @default(NONE) // 仅 PUBLIC 需要审批
   externalPassword String? //  「对外部可见」访问密码（bcrypt hash；离开 EXTERNAL 时清空）

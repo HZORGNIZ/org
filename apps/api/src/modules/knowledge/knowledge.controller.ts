@@ -73,6 +73,7 @@ export class KnowledgeController {
     body: {
       title: string;
       content: string;
+      docType?: string | null;
       categoryId?: string;
       projectId?: string;
       departmentId?: string;
@@ -94,6 +95,7 @@ export class KnowledgeController {
     body: {
       title?: string;
       content?: string;
+      docType?: string | null;
       categoryId?: string | null;
       projectId?: string | null;
       departmentId?: string | null;

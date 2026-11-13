@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { DocPermission, DocVisibility, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { deptOfProjectAuthority } from '../../common/dept-authority';
+import { normalizeDocType } from '../../common/doc-types';
 import { writeAccessLog } from '../../common/access-log';
 
 /** 文档操作人（带部门上下文，由 controller 从 JWT 载荷传入） */
@@ -169,6 +170,7 @@ export class KnowledgeService {
     data: {
       title: string;
       content: string;
+      docType?: string | null;
       categoryId?: string;
       projectId?: string;
       departmentId?: string;
@@ -181,6 +183,7 @@ export class KnowledgeService {
         data: {
           title: data.title,
           content: data.content,
+          docType: normalizeDocType(data.docType),
           categoryId: data.categoryId,
           projectId: data.projectId,
           departmentId: data.departmentId,
@@ -209,6 +212,7 @@ export class KnowledgeService {
     data: {
       title?: string;
       content?: string;
+      docType?: string | null;
       categoryId?: string | null;
       projectId?: string | null;
       departmentId?: string | null;
@@ -224,7 +228,7 @@ export class KnowledgeService {
     if (!this.hasEditPermission(prev, user)) {
       throw new ForbiddenException('无该文档编辑权限（仅管理员/作者/被授权编辑者）');
     }
-    const { shares, ...patch } = data;
+    const { shares, docType, ...patch } = data;
     return this.prisma.$transaction(async (tx) => {
       if (shares !== undefined) {
         // 授权名单全量替换（作者本人的隐式权限不入库）
@@ -245,6 +249,7 @@ export class KnowledgeService {
         where: { id },
         data: {
           ...patch,
+          ...(docType !== undefined ? { docType: normalizeDocType(docType) } : {}),
           updatedById: user.id,
           version: prev.version + 1,
         },

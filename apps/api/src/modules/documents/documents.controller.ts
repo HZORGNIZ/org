@@ -50,8 +50,9 @@ export class DocumentsController {
     @Query('targetId') targetId: string,
     @Query('folderId') folderId?: string,
     @Query('keyword') keyword?: string,
+    @Query('docType') docType?: string,
   ) {
-    return this.documents.space(this.ctx(user), { scope, targetId, folderId, keyword });
+    return this.documents.space(this.ctx(user), { scope, targetId, folderId, keyword, docType });
   }
 
   @Get('breadcrumb/:folderId')
@@ -123,6 +124,7 @@ export class DocumentsController {
       externalPassword?: string;
       externalValidDays?: string;
       note?: string;
+      docType?: string;
       conflict?: ConflictPolicy;
     },
   ) {
@@ -140,6 +142,7 @@ export class DocumentsController {
         externalPassword: body.externalPassword,
         externalValidDays: body.externalValidDays,
         note: body.note,
+        docType: body.docType,
         conflict: body.conflict,
       });
     } finally {
@@ -199,7 +202,7 @@ export class DocumentsController {
   patchFile(
     @CurrentUser() user: CurrentUserPayload,
     @Param('id') id: string,
-    @Body() body: { name?: string; note?: string | null; visibility?: FileVisibility; externalPassword?: string; externalValidDays?: number | string | null; folderId?: string | null },
+    @Body() body: { name?: string; note?: string | null; docType?: string | null; visibility?: FileVisibility; externalPassword?: string; externalValidDays?: number | string | null; folderId?: string | null },
   ) {
     return this.documents.patchFile(this.ctx(user), id, body);
   }

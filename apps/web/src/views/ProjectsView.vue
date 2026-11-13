@@ -472,7 +472,12 @@ async function create() {
     if (!projectId) throw new Error('项目创建失败：未返回 id');
     const uploaded: string[] = [];
     for (const f of reqDocFiles.value) {
-      const r: any = await documentsApi.upload(f, { scope: 'project', targetId: projectId });
+      // 立项必传的需求文档自动打「产品需求文档」类型，进项目空间后可被类型筛选到
+      const r: any = await documentsApi.upload(f, {
+        scope: 'project',
+        targetId: projectId,
+        docType: '产品需求文档',
+      });
       if (r?.id) uploaded.push(r.id);
     }
     if (uploaded.length) {

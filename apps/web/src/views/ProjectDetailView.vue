@@ -537,11 +537,31 @@
         <template #label>项目文档</template>
         <!-- 文档空间（合并：在线项目文档 + 项目文件空间；看板已移除此页，看板功能仍在独立 /board 路由） -->
         <div class="page-card">
-          <div class="block-title">文档空间</div>
-          <div class="muted doc-empty">在线项目文档，以及可新建文件夹、拖拽上传、保留历史版本、docx 在线编辑的文件空间</div>
-          <div v-if="!projDocs.length" class="muted doc-empty">暂无在线项目文档</div>
-          <div v-for="d in projDocs" :key="d.id" class="doc-row" @click="openProjectDoc(d)">
+          <div class="block-title-row">
+            <span class="block-title">文档空间</span>
+            <!-- 在线文档多了以后靠类型收敛；文件空间内另有独立的类型筛选 -->
+            <el-select
+              v-if="projDocs.length"
+              v-model="docFilterType"
+              size="small"
+              placeholder="全部类型"
+              clearable
+              filterable
+              style="width: 140px"
+            >
+              <el-option v-for="t in docTypeChoices" :key="t" :label="t" :value="t" />
+            </el-select>
+          </div>
+          <div class="muted doc-empty">
+            在线项目文档（可按类型归档），以及可新建文件夹、拖拽上传、保留历史版本、docx 在线编辑的文件空间
+          </div>
+          <div v-if="!docFilteredDocs.length" class="muted doc-empty">
+            {{ projDocs.length ? '该类型下暂无在线项目文档' : '暂无在线项目文档' }}
+          </div>
+          <div v-for="d in docFilteredDocs" :key="d.id" class="doc-row" @click="openProjectDoc(d)">
             <span class="ellipsis doc-name">{{ d.title }}</span>
+            <!-- 文档类型（未分类不占位，避免一排「未分类」噪声） -->
+            <el-tag v-if="d.docType" size="small" effect="plain" :type="docTypeMeta(d.docType).color">{{ d.docType }}</el-tag>
             <el-tag size="small" :type="DOC_VIS_TYPE[d.visibility] || 'info'" effect="plain">
               {{ DOC_VIS_LABEL[d.visibility] || d.visibility }}
             </el-tag>
@@ -795,6 +815,20 @@
         <el-form-item label="标题" required>
           <el-input v-model="docForm.title" maxlength="100" placeholder="文档标题" />
         </el-form-item>
+        <el-form-item label="文档类型">
+          <el-select
+            v-model="docForm.docType"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="选择或输入类型（留空为未分类）"
+            style="width: 100%"
+          >
+            <el-option v-for="t in docTypeChoices" :key="t" :label="t" :value="t" />
+          </el-select>
+          <div class="muted doc-type-hint">产品需求文档 / 硬件清单 / 功能清单 / 技术方案 / 开发提示词 / 接线文档；需要新类型直接输入即可。</div>
+        </el-form-item>
         <el-form-item label="内容（支持 Markdown）">
           <el-input v-model="docForm.content" type="textarea" :rows="10" placeholder="# 标题&#10;&#10;正文…" />
         </el-form-item>
@@ -816,6 +850,9 @@
     <el-drawer v-model="docDetailVisible" :title="currentDoc?.title" size="min(94vw, 640px)">
       <template v-if="currentDoc">
         <div class="muted doc-detail-meta">
+          <el-tag v-if="currentDoc.docType" size="small" effect="plain" :type="docTypeMeta(currentDoc.docType).color">
+            {{ currentDoc.docType }}
+          </el-tag>
           {{ currentDoc.author?.name }} · 更新于 {{ fmt(currentDoc.updatedAt, 'YYYY-MM-DD HH:mm') }} ·
           {{ DOC_VIS_LABEL[currentDoc.visibility] || currentDoc.visibility }}
         </div>
@@ -849,6 +886,7 @@ import { projectsApi, tasksApi, usersApi, departmentsApi, knowledgeApi, filesApi
 import { useAuthStore } from '../stores/auth';
 import { TASK_PRIORITY, TASK_STATUS, fmt, isToday, updateDate } from '../utils/format';
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
+import { docTypeMeta, docTypeOptions } from '../utils/doc-types';
 import MarkdownView from '../components/MarkdownView.vue';
 import DocumentSpace from '../components/DocumentSpace.vue';
 import ConvertTaskDialog from '../components/ConvertTaskDialog.vue';
@@ -1473,7 +1511,14 @@ const docFormVisible = ref(false);
 /** 项目文档空间（二进制文件）抽屉 */
 const docSpaceVisible = ref(false);
 const docSaving = ref(false);
-const docForm = reactive({ title: '', content: '' });
+const docForm = reactive({ title: '', content: '', docType: '' });
+/** 类型下拉：预置词表 + 本项目已用过的自定义类型 */
+const docTypeChoices = computed(() => docTypeOptions(projDocs.value.map((d: any) => d.docType)));
+/** 在线文档列表的类型筛选（本地过滤，列表本就是一次拉全量） */
+const docFilterType = ref('');
+const docFilteredDocs = computed(() =>
+  docFilterType.value ? projDocs.value.filter((d: any) => (d.docType || '') === docFilterType.value) : projDocs.value,
+);
 const docDetailVisible = ref(false);
 const currentDoc = ref<any>(null);
 
@@ -1524,6 +1569,7 @@ async function saveProjectDoc() {
     const created: any = await knowledgeApi.create({
       title: docForm.title.trim(),
       content: docForm.content,
+      docType: docForm.docType.trim() || null,
       projectId: project.value?.id,
       visibility: 'PROJECT',
     });
@@ -1539,7 +1585,7 @@ async function saveProjectDoc() {
     }
     ElMessage.success(okCount ? `项目文档已上传（附件 ${okCount} 个）` : '项目文档已上传');
     docFormVisible.value = false;
-    Object.assign(docForm, { title: '', content: '' });
+    Object.assign(docForm, { title: '', content: '', docType: '' });
     docFiles.value = [];
     await loadProjDocs();
   } finally {
@@ -2448,6 +2494,12 @@ const infoOpen = ref(false);
 }
 .doc-detail-meta {
   margin-bottom: 12px;
+}
+/* 类型下拉下方的可选类型提示（长文案换行不撑破弹窗） */
+.doc-type-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
 }
 
 /* ---- 项目审批横幅 ---- */
