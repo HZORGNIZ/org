@@ -459,6 +459,12 @@
         />
       </el-tab-pane>
 
+      <el-tab-pane v-if="project?.hasGithub" name="github">
+        <template #label>GitHub</template>
+        <!-- GitHub：本项目仓库信息（名称/地址/可见性/说明/备注）；仅项目成员/负责人/部门负责人/管理员可见，由项目负责人维护 -->
+        <ProjectGithubPanel v-if="project?.id" :project-id="project.id" :can-manage="canManageSchedule" />
+      </el-tab-pane>
+
       <el-tab-pane name="meetings">
         <template #label>项目会议</template>
       <!-- 项目会议：已开始的会议按日期倒序列出（日期 + 主题），点击打开会议详情；右上角为发起项目会议入口 -->
@@ -740,7 +746,13 @@
         <el-form-item label="硬件资产">
           <div class="digest-switch">
             <el-switch v-model="editForm.hasHardware" />
-            <span class="muted">开启后详情页出现「硬件」TAB，可登记本项目元件（名称 / 型号 / 说明 / 状态 / 保管人 / 备注）；保管人默认为项目组长，状态含采购中、待采购、已采购待领取、已分配、已归还</span>
+            <span class="muted">每个项目默认开启。开启后详情页出现「硬件」TAB，可登记本项目元件（名称 / 型号 / 说明 / 状态 / 保管人 / 备注）；保管人默认为项目组长，状态含采购中、待采购、已采购待领取、已分配、已归还</span>
+          </div>
+        </el-form-item>
+        <el-form-item label="GitHub 信息">
+          <div class="digest-switch">
+            <el-switch v-model="editForm.hasGithub" />
+            <span class="muted">每个项目默认开启。开启后详情页出现「GitHub」TAB，由项目负责人维护仓库信息（名称 / 地址 / 可见性 / 说明 / 备注）；仅项目成员、负责人、部门负责人与系统管理员可见</span>
           </div>
         </el-form-item>
         <el-form-item label="转让项目负责人（原负责人自动降为普通成员）">
@@ -847,6 +859,7 @@ import ProjectDailyPanel from '../components/ProjectDailyPanel.vue';
 import ProjectSchedulePanel from '../components/ProjectSchedulePanel.vue';
 import ProjectMemberSchedulePanel from '../components/ProjectMemberSchedulePanel.vue';
 import ProjectHardwarePanel from '../components/ProjectHardwarePanel.vue';
+import ProjectGithubPanel from '../components/ProjectGithubPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -854,12 +867,14 @@ const auth = useAuthStore();
 
 const project = ref<any>(null);
 // 重点板块改由 Tab 分组展示；Tab 状态写入 ?tab= 便于深链（首页/消息里的「项目日报」入口可直接跳到日报 Tab）
-const TAB_NAMES = ['overview', 'schedule', 'daily', 'worktime', 'tasks', 'hardware', 'meetings', 'weekly', 'docs'];
+const TAB_NAMES = ['overview', 'schedule', 'daily', 'worktime', 'tasks', 'hardware', 'github', 'meetings', 'weekly', 'docs'];
 const activeTab = computed({
   get: () => {
     const q = String(route.query.tab ?? '');
-    // 「硬件」TAB 仅在项目设置开启硬件资产后存在，未开启的项目深链回到概览
-    const names = TAB_NAMES.filter((n) => n !== 'hardware' || project.value?.hasHardware);
+    // 「硬件」「GitHub」TAB 仅在项目设置开启后存在，未开启的项目深链回到概览
+    const names = TAB_NAMES.filter(
+      (n) => (n !== 'hardware' || project.value?.hasHardware) && (n !== 'github' || project.value?.hasGithub),
+    );
     return names.includes(q) ? q : 'overview';
   },
   // el-tabs 的 v-model 要能写回 URL，否则点 Tab 只高亮不切内容
@@ -984,7 +999,7 @@ const tasksLoading = ref(false);
 const taskDrawer = ref(false);
 const currentTaskId = ref<string | null>(null);
 const taskFormVisible = ref(false);
-const editForm = reactive({ name: '', description: '', color: '#428bff', dingtalkConversationId: '', dingtalkGroupName: '', dailyDigestEnabled: false, digestTime: '20:00', digestEveryDays: 1, archived: false, hasHardware: false, departmentIds: [] as string[], confidential: false });
+const editForm = reactive({ name: '', description: '', color: '#428bff', dingtalkConversationId: '', dingtalkGroupName: '', dailyDigestEnabled: false, digestTime: '20:00', digestEveryDays: 1, archived: false, hasHardware: false, hasGithub: true, departmentIds: [] as string[], confidential: false });
 
 /** 保密项目未签协议：详情接口只回 { locked: 'NDA', nda } 锁定壳 */
 const ndaLocked = computed(() => project.value?.locked === 'NDA');
@@ -1445,6 +1460,7 @@ function syncEditForm() {
   editForm.digestEveryDays = project.value.digestEveryDays ?? 1;
   editForm.archived = project.value.archived ?? false;
   editForm.hasHardware = project.value.hasHardware ?? false;
+  editForm.hasGithub = project.value.hasGithub ?? true;
   editForm.departmentIds = (project.value.departments || []).map((d: any) => d.id);
   editForm.confidential = project.value.confidential ?? false;
 }
@@ -1603,6 +1619,7 @@ async function saveSettings() {
       digestEveryDays: editForm.digestEveryDays || 1,
       archived: editForm.archived,
       hasHardware: editForm.hasHardware,
+      hasGithub: editForm.hasGithub,
       departmentIds: editForm.departmentIds,
     });
     // 保密标记走独立接口（仅管理员）：通用改项目接口会一律忽略 confidential

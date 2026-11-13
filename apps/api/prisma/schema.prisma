@@ -365,8 +365,10 @@ model Project {
   // ---- 立项必填确认：里程碑/需求文档默认必填；勾选「本项目确定不需要」才豁免（发起者显式确认，审批人可见）----
   skipMilestone     Boolean @default(false) // 创建人确认本项目不需要里程碑
   skipRequirementDoc Boolean @default(false) // 创建人确认本项目不需要需求文档
-  // ---- 硬件资产（项目设置开启后，详情页出现「硬件」TAB 管理元件清单）----
-  hasHardware       Boolean @default(false)
+  // ---- 硬件资产（每个项目默认开启；详情页出现「硬件」TAB 管理元件清单）----
+  hasHardware       Boolean @default(true)
+  // ---- GitHub 信息（每个项目默认开启；详情页出现「GitHub」TAB，仅项目成员/负责人/部门负责人/管理员可见，由项目负责人维护）----
+  hasGithub         Boolean @default(true)
   // ---- AI 项目完成度/健康度快照（手动重算 或 GET 详情命中 24h 陈旧时后台补算）----
   completionPercent Int?
   healthLevel       HealthLevel?
@@ -409,6 +411,7 @@ model Project {
   rules      ProjectRule[] // 项目规则（负责人/管理员发布，成员需已阅）
   inventories ProjectInventory[] // 关联的资源盘点条目（可空，仅管理员维护）
   hardware  ProjectHardware[] // 硬件资产/元件清单（项目设置开启 hasHardware 后启用）
+  github    ProjectGithub[] // GitHub 仓库信息（开启 hasGithub 后启用；仅成员/负责人/部门负责人/管理员可见）
 
   @@index([ownerId])
   @@index([approverId, status])
@@ -503,7 +506,24 @@ model ProjectHardware {
   @@index([projectId, createdAt])
 }
 
-// 项目进展（AI 从钉钉群聊自动总结，或手动记录）
+// 项目 GitHub 信息（详情页「GitHub」TAB；每个项目默认开启 hasGithub 后启用）
+// 可见性：仅项目成员 / 项目负责人 / 主要关联部门负责人 / 系统管理员；维护：仅项目负责人 + 系统管理员
+// url 不设唯一约束（同一项目可登记多个仓库，如 前端/后端/固件 分仓）
+model ProjectGithub {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String // 仓库名称/用途（如 myorgniz 主仓）
+  url       String // 仓库地址（https://github.com/...）
+  desc      String? // 说明（仓库内容/职责）
+  isPrivate Boolean  @default(true) // 是否私有仓库
+  remark    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
 model ProjectUpdate {
   id          String   @id @default(cuid())
   projectId   String

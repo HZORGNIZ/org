@@ -2091,6 +2091,117 @@ export class ProjectsService {
     }
   }
 
+  // ---- GitHub 信息（项目设置开启 hasGithub 后，详情页「GitHub」TAB）----
+
+  /** GitHub 查看权限：ADMIN / 项目成员 / 项目负责人 / 主要关联部门负责人；保密项目需先签协议（与规则同口径） */
+  private async assertGithubViewer(projectId: string, userId: string, role: string) {
+    if (role === Role.ADMIN) return;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        confidential: true,
+        ownerId: true,
+        members: { where: { userId }, select: { id: true } },
+        departments: { where: { department: ledDeptWhere(userId) }, select: { id: true } },
+      },
+    });
+    if (!project) throw new NotFoundException('项目不存在');
+    const allowed = project.ownerId === userId || project.members.length > 0 || project.departments.length > 0;
+    if (!allowed) {
+      throw new ForbiddenException('仅项目成员、项目负责人、部门负责人或系统管理员可查看 GitHub 信息');
+    }
+    if (project.confidential) {
+      const signed = await this.prisma.ndaSign.count({ where: { projectId, userId } });
+      if (!signed) throw new ForbiddenException('请先在项目页签署保密协议，再查看 GitHub 信息');
+    }
+  }
+
+  /** GitHub 维护权限：仅项目负责人（owner/组长）+ 系统管理员；部门负责人可看不可改 */
+  async assertGithubMaintainer(projectId: string, userId: string) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        ownerId: true,
+        members: { where: { userId, role: 'OWNER' }, select: { id: true } },
+      },
+    });
+    if (!project) throw new NotFoundException('项目不存在');
+    if (project.ownerId !== userId && !project.members.length) {
+      throw new ForbiddenException('仅项目负责人可维护 GitHub 信息');
+    }
+  }
+
+  /** GitHub 仓库清单（仅项目成员/负责人/部门负责人/管理员可见） */
+  async githubList(projectId: string, userId: string, role: string) {
+    await this.assertGithubViewer(projectId, userId, role);
+    const items = await this.prisma.projectGithub.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return { ok: true, items };
+  }
+
+  /** 新增 GitHub 仓库条目（仅项目负责人/管理员） */
+  async githubCreate(
+    projectId: string,
+    userId: string,
+    role: string,
+    data: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, hasGithub: true },
+    });
+    if (!project) throw new NotFoundException('项目不存在');
+    if (!project.hasGithub) throw new BadRequestException('本项目未开启 GitHub 信息管理（项目设置 → GitHub 信息）');
+    const row = this.normalizeGithub(data);
+    const created = await this.prisma.projectGithub.create({
+      data: { projectId, ...row, ...(row.isPrivate === undefined ? { isPrivate: true } : {}) },
+    });
+    return { ok: true, item: created };
+  }
+
+  /** 修改 GitHub 仓库条目（仅项目负责人/管理员） */
+  async githubUpdate(
+    projectId: string,
+    itemId: string,
+    userId: string,
+    role: string,
+    data: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) {
+    const existing = await this.prisma.projectGithub.findUnique({ where: { id: itemId } });
+    if (!existing || existing.projectId !== projectId) throw new NotFoundException('GitHub 条目不存在');
+    const row = this.normalizeGithub(data);
+    const updated = await this.prisma.projectGithub.update({ where: { id: itemId }, data: row });
+    return { ok: true, item: updated };
+  }
+
+  /** 删除 GitHub 仓库条目（仅项目负责人/管理员） */
+  async githubRemove(projectId: string, itemId: string, userId: string, role: string) {
+    const existing = await this.prisma.projectGithub.findUnique({ where: { id: itemId } });
+    if (!existing || existing.projectId !== projectId) throw new NotFoundException('GitHub 条目不存在');
+    await this.prisma.projectGithub.delete({ where: { id: itemId } });
+    return { ok: true };
+  }
+
+  /** GitHub 入参收敛：名称必填、url 必须是 github.com 仓库地址、文本限长 */
+  private normalizeGithub(data: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null }) {
+    const name = String(data?.name ?? '').trim();
+    if (!name) throw new BadRequestException('请填写仓库名称');
+    const url = String(data?.url ?? '').trim();
+    if (!/^https:\/\/(www\.)?github\.com\/[\w.-]+\/[\w.-]+(\/.*)?$/.test(url)) {
+      throw new BadRequestException('仓库地址需为 https://github.com/用户/仓库 格式');
+    }
+    return {
+      name: name.slice(0, 60),
+      url: url.slice(0, 300),
+      desc: data?.desc ? String(data.desc).trim().slice(0, 300) : null,
+      // 仅显式传入时才写 isPrivate（编辑不传不重置；新建由调用方兜底为私有）
+      ...(data?.isPrivate === undefined ? {} : { isPrivate: Boolean(data.isPrivate) }),
+      remark: data?.remark ? String(data.remark).trim().slice(0, 300) : null,
+    };
+  }
+
   /** 是否可管理成员（系统管理员 / 项目负责人 OWNER / 主要关联部门负责人或共管人） */
   async canManageMembers(projectId: string, userId: string) {
     const project = await this.prisma.project.findUnique({

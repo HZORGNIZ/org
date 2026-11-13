@@ -192,6 +192,21 @@ export const projectsApi = {
   ) => api.patch<any>(`/projects/${id}/hardware/${itemId}`, data),
   /** 删除硬件条目 */
   hardwareRemove: (id: string, itemId: string) => api.del<any>(`/projects/${id}/hardware/${itemId}`),
+  /** GitHub 仓库清单（项目设置开启 hasGithub 后启用；仅项目成员/负责人/部门负责人/管理员可见） */
+  githubList: (id: string) => api.get<any>(`/projects/${id}/github`),
+  /** 新增 GitHub 仓库条目（仅项目负责人/管理员维护） */
+  githubCreate: (
+    id: string,
+    data: { name: string; url: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) => api.post<any>(`/projects/${id}/github`, data),
+  /** 修改 GitHub 仓库条目 */
+  githubUpdate: (
+    id: string,
+    itemId: string,
+    data: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) => api.patch<any>(`/projects/${id}/github/${itemId}`, data),
+  /** 删除 GitHub 仓库条目 */
+  githubRemove: (id: string, itemId: string) => api.del<any>(`/projects/${id}/github/${itemId}`),
   /** 项目周报聚合视图（F27）：periodStart 传任意日期归一到该自然周，缺省本周 */
   weeklyReport: (id: string, periodStart?: string) =>
     api.get<any>(`/projects/${id}/weekly-report${periodStart ? `?periodStart=${encodeURIComponent(periodStart)}` : ''}`),

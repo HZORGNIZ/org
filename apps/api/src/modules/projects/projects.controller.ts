@@ -274,6 +274,50 @@ export class ProjectsController {
     return this.projects.hardwareRemove(id, itemId, user.id, user.role);
   }
 
+  // ---- GitHub 信息（项目设置开启 hasGithub 后，详情页「GitHub」TAB）----
+
+  /** GitHub 仓库清单（仅项目成员/项目负责人/主要关联部门负责人/系统管理员可见；保密项目需先签协议） */
+  @Get(':id/github')
+  githubList(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.githubList(id, user.id, user.role);
+  }
+
+  /** 新增 GitHub 仓库条目（仅项目负责人/系统管理员维护） */
+  @Post(':id/github')
+  async githubCreate(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body()
+    body: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertGithubMaintainer(id, user.id);
+    return this.projects.githubCreate(id, user.id, user.role, body ?? {});
+  }
+
+  /** 修改 GitHub 仓库条目（仅项目负责人/系统管理员维护） */
+  @Patch(':id/github/:itemId')
+  async githubUpdate(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body()
+    body: { name?: string; url?: string; desc?: string; isPrivate?: boolean; remark?: string | null },
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertGithubMaintainer(id, user.id);
+    return this.projects.githubUpdate(id, itemId, user.id, user.role, body ?? {});
+  }
+
+  /** 删除 GitHub 仓库条目（仅项目负责人/系统管理员维护） */
+  @Delete(':id/github/:itemId')
+  async githubRemove(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    if (user.role !== Role.ADMIN) await this.projects.assertGithubMaintainer(id, user.id);
+    return this.projects.githubRemove(id, itemId, user.id, user.role);
+  }
+
   /** 项目周报聚合视图（F27）：?periodStart= 任意日期归一到该北京自然周，默认本周 */
   @Get(':id/weekly-report')
   weeklyReport(
@@ -427,6 +471,7 @@ export class ProjectsController {
       skipMilestone?: boolean;
       skipRequirementDoc?: boolean;
       hasHardware?: boolean;
+      hasGithub?: boolean;
     },
   ) {
     // 仅管理员或项目 OWNER/ADMIN 可修改项目设置（含钉钉群关联）
