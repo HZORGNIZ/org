@@ -146,7 +146,7 @@
             <el-radio-button value="plan">我的计划</el-radio-button>
             <el-radio-button value="self">我的自评</el-radio-button>
             <el-radio-button v-if="showReviewTab" value="review">
-              待我审核<template v-if="reviewPending">（{{ reviewPending }}）</template>
+              待我审核<template v-if="reviewPending || winReqPending">（{{ [reviewPending ? `${reviewPending} 待复核` : '', winReqPending ? `${winReqPending} 补写申请` : ''].filter(Boolean).join(' · ') }}）</template>
             </el-radio-button>
             <el-radio-button value="rank">排行榜</el-radio-button>
           </el-radio-group>
@@ -165,8 +165,32 @@
             :closable="false"
             show-icon
             title="当前不在本月计划填写时间窗口"
-            :description="planWindowHint || '当月计划需在 1~10 号填写/提交；历史月份可随时补录（管理员不受限）'"
-          />
+          >
+            <div class="pbc-window-req">
+              <div class="muted">{{ planWindowHint || '当月计划需在 1~10 号填写/提交；历史月份可随时补录（管理员不受限）' }}</div>
+              <div class="pbc-window-req-row">
+                <template v-if="planWindowRequest?.status === 'PENDING'">
+                  <el-tag size="small" type="warning" effect="plain">
+                    补写申请审批中（{{ dayjs(planWindowRequest.createdAt).format('MM-DD HH:mm') }} 提交）
+                  </el-tag>
+                  <span class="muted">已通知上级审批，批准后即可填写该月计划。</span>
+                </template>
+                <template v-else-if="planWindowRequest?.status === 'REJECTED'">
+                  <el-tag size="small" type="danger" effect="plain">补写申请已被{{ planWindowRequest.approverName || '上级' }}驳回</el-tag>
+                  <span v-if="planWindowRequest.comment" class="muted">驳回意见：{{ planWindowRequest.comment }}</span>
+                </template>
+                <el-button
+                  v-if="planWindowRequest?.status !== 'PENDING' && planWindowRequest?.status !== 'APPROVED'"
+                  size="small"
+                  type="primary"
+                  plain
+                  @click="applyWindowExemption"
+                >
+                  {{ planWindowRequest?.status === 'REJECTED' ? '修改理由重新申请' : '向上级申请补写' }}
+                </el-button>
+              </div>
+            </div>
+          </el-alert>
           <el-alert v-if="planEditable" class="pbc-guide" type="info" :closable="false" show-icon title="填写要求">
             <ol class="pbc-guide-list">
               <li>每一条内容具体、可衡量、可达到、可展示；</li>
@@ -543,7 +567,7 @@
         </el-select>
         <el-button text type="primary" size="small" :loading="pbcTeamLoading" @click="loadPbcTeam">刷新</el-button>
         <el-button v-if="showReviewTab" text type="warning" size="small" @click="goReview">
-          待我审核{{ reviewPending ? `（${reviewPending}）` : '' }}
+          待我审核{{ reviewPending || winReqPending ? `（${[reviewPending ? `${reviewPending} 待复核` : '', winReqPending ? `${winReqPending} 补写申请` : ''].filter(Boolean).join(' · ')}）` : '' }}
         </el-button>
       </div>
       <div class="pbc-team-kpi">
@@ -1132,6 +1156,8 @@ const showSelfCols = computed(() => canSelfReview.value || reviewStatus.value !=
 // ---- 时间窗口（固定 PBC 节奏） ----
 const planWindowOpen = ref(true);
 const planWindowHint = ref('');
+/** 我的计划补写申请（错过 1~10 号窗口后向上级申请）：null=未申请 */
+const planWindowRequest = ref<{ id: string; status: 'PENDING' | 'APPROVED' | 'REJECTED'; reason: string; approverName: string | null; comment: string | null; decidedAt: string | null; createdAt: string } | null>(null);
 const selfReviewWindowOpen = ref(true);
 const selfReviewWindow = ref('');
 /** 考核结果的补充信息（自评提交/复核定稿时间、打分上级、撤销留痕） */
@@ -1148,9 +1174,11 @@ function normPbcView(v: any): PbcViewKey {
   return (['plan', 'self', 'review', 'rank'] as string[]).includes(s) ? (s as PbcViewKey) : 'plan';
 }
 const pbcView = ref<PbcViewKey>(normPbcView(route.query.view));
-/** 「待我审核」页签：ADMIN 恒显示；其他人有待审核任务时显示 */
+/** 「待我审核」页签：ADMIN 恒显示；其他人有待审核任务或待审批补写申请时显示 */
 const reviewPending = ref(0);
-const showReviewTab = computed(() => auth.isAdmin || reviewPending.value > 0);
+/** 待我审批的 PBC 计划补写申请数（成员错过 1~10 号窗口后提交） */
+const winReqPending = ref(0);
+const showReviewTab = computed(() => auth.isAdmin || reviewPending.value > 0 || winReqPending.value > 0);
 
 /** 切 PBC 子视图：同步到地址栏（钉钉消息可直接深链到「待我审核」） */
 function onPbcViewChange(name: any) {
@@ -1174,13 +1202,19 @@ function onPbcMonthChange() {
   loadPbc();
 }
 
-/** 只查待审核数量（用于页签角标与是否显示「待我审核」） */
+/** 只查待审核数量（用于页签角标与是否显示「待我审核」），顺带刷新待审批补写申请数 */
 async function loadReviewPending() {
   try {
     const q = await pbcApi.reviewQueue();
     reviewPending.value = q.pending;
   } catch {
     reviewPending.value = 0;
+  }
+  try {
+    const rows = await pbcApi.windowRequests();
+    winReqPending.value = rows.filter((r) => r.canDecide).length;
+  } catch {
+    winReqPending.value = 0;
   }
 }
 
@@ -1216,6 +1250,7 @@ async function loadPbc() {
     // 时间窗口标志（缺省视为开放，兼容旧后端；自评窗口仅作参考提示）
     planWindowOpen.value = (r as any).planWindowOpen !== false;
     planWindowHint.value = (r as any).planWindowHint ?? '';
+    planWindowRequest.value = ((r as any).planWindowRequest as typeof planWindowRequest.value) ?? null;
     selfReviewWindowOpen.value = (r as any).selfReviewWindowOpen !== false;
     selfReviewWindow.value = (r as any).selfReviewWindow ?? '';
     selfSummary.value = r.selfSummary ?? '';
@@ -1321,6 +1356,29 @@ async function savePbc() {
     reviewStatus.value = 'NOT_STARTED';
   } finally {
     pbcSaving.value = false;
+  }
+}
+
+/** 向上级申请补写 PBC 计划：错过 1~10 号窗口后填写理由提交，批准后该月窗口放行 */
+async function applyWindowExemption() {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `向你的上级申请补写 ${pbcMonth.value} 的月度 PBC 计划，批准后即可填写提交（仍需正常审批）。请说明原因：`,
+      '申请补写 PBC 计划',
+      {
+        type: 'info',
+        confirmButtonText: '提交申请',
+        cancelButtonText: '取消',
+        inputPlaceholder: '例如：月初出差/请假，错过了 1~10 号填写窗口',
+        inputValue: planWindowRequest.value?.status === 'REJECTED' ? planWindowRequest.value.reason : '',
+        inputValidator: (v: string) => (String(v ?? '').trim().length >= 5 ? true : '请至少写 5 个字的申请理由'),
+      },
+    );
+    await pbcApi.requestWindow(pbcMonth.value, String(value ?? '').trim());
+    ElMessage.success('补写申请已提交，已通知上级审批');
+    await loadPbc();
+  } catch {
+    /* 用户取消 */
   }
 }
 
@@ -1885,6 +1943,19 @@ watch(
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
+}
+/* 计划窗口外「补写申请」区 */
+.pbc-window-req {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.pbc-window-req-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .form-row {
   display: flex;

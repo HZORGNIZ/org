@@ -32,6 +32,12 @@ export class PbcController {
     return this.pbc.reviewQueue({ id: user.id, role: user.role }, month);
   }
 
+  /** PBC 计划补写申请清单：我自己的 + 我可审批的（部门管理者/直属上级/ADMIN）；?month=YYYY-MM 可选 */
+  @Get('window-requests')
+  windowRequests(@CurrentUser() user: CurrentUserPayload, @Query('month') month?: string) {
+    return this.pbc.listWindowRequests({ id: user.id, role: user.role }, month);
+  }
+
   /** 有定稿评分的月份（降序）：排行榜默认月与月份下拉用 */
   @Get('ranking/months')
   rankingMonths() {
@@ -57,6 +63,21 @@ export class PbcController {
     @Body() body: { month: string; items: PbcItem[] },
   ) {
     return this.pbc.saveMine(userId, body?.month, body?.items ?? []);
+  }
+
+  /** 提交 PBC 计划补写申请：错过当月 1~10 号窗口时向上级申请，批准后该月可补写 */
+  @Post('window-request')
+  requestWindow(@CurrentUser('id') userId: string, @Body() body: { month: string; reason: string }) {
+    return this.pbc.requestWindow(userId, body?.month, body?.reason);
+  }
+
+  /** 审批 PBC 计划补写申请：批准后成员该月计划窗口放行；驳回后成员可修改理由重新申请 */
+  @Post('window-request/decide')
+  decideWindow(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() body: { id: string; approve: boolean; comment?: string },
+  ) {
+    return this.pbc.decideWindowRequest({ id: user.id, role: user.role, name: user.name }, body?.id, body?.approve !== false, body?.comment);
   }
 
   /** 审批通过某成员某月 PBC（负责人审批本部门成员 / 管理员审批任意） */

@@ -95,6 +95,23 @@ export interface PbcRankEntry {
   selfTotal: number | null;
 }
 
+/** PBC 计划补写申请（错过 1~10 号窗口后向上级申请，批准后该月放行） */
+export interface PbcWindowRequestRow {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  department: string | null;
+  month: string;
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  approverName: string | null;
+  comment: string | null;
+  decidedAt: Date | null;
+  createdAt: Date;
+  /** 当前查看者能否审批该申请（自己的申请恒为 false） */
+  canDecide: boolean;
+}
+
 @Injectable()
 export class PbcService {
   private readonly logger = new Logger(PbcService.name);
@@ -121,9 +138,12 @@ export class PbcService {
     const leaderOptions = await this.leaderOptions(userId);
     // ---- 时间窗口（固定 PBC 节奏：计划=当月1~10号；自评=月末3天~次月5号；ADMIN 豁免） ----
     const winAdmin = user?.role === 'ADMIN';
-    const planWin = this.planWindow(m, winAdmin);
+    const winExempt = await this.approvedWindowExemption(userId, m);
+    const planWin = this.planWindow(m, winAdmin, winExempt);
     const selfWin = this.selfReviewWindow(m, winAdmin);
     const defaultLeaderId = await this.resolveDefaultLeaderId(userId);
+    // 补写申请（错过窗口后向上级申请；供前端展示申请状态与入口）
+    const wr = await this.prisma.pbcWindowRequest.findUnique({ where: { ownerId_month: { ownerId: userId, month: m } } });
     return {
       month: m,
       items,
@@ -158,6 +178,18 @@ export class PbcService {
       planWindowHint: planWin.hint,
       selfReviewWindowOpen: selfWin.open,
       selfReviewWindow: selfWin.windowText,
+      // ---- 计划补写申请（PENDING/APPROVED/REJECTED 或 null=未申请） ----
+      planWindowRequest: wr
+        ? {
+            id: wr.id,
+            status: wr.status as 'PENDING' | 'APPROVED' | 'REJECTED',
+            reason: wr.reason,
+            approverName: wr.approverName,
+            comment: wr.comment,
+            decidedAt: wr.decidedAt,
+            createdAt: wr.createdAt,
+          }
+        : null,
       // 最近一次「撤销定稿」留痕（有则展示给本人，说明分数为何回到待审核）
       lastRevoke: await this.lastRevokeOf(userId, m),
     };
@@ -243,9 +275,10 @@ export class PbcService {
       const approver = existing.approvedById ? await this.userName(existing.approvedById) : null;
       throw new BadRequestException(`该月 PBC 已由${approver ? `「${approver}」` : '负责人'}审批通过并锁定，如需修改请让对方「允许修改」`);
     }
-    // 计划填写窗口：只能在当月 1~10 号填写/提交本月计划（ADMIN 豁免）
+    // 计划填写窗口：只能在当月 1~10 号填写/提交本月计划（ADMIN 豁免；上级批准补写申请后同样放行）
     const planActor = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-    const pw = this.planWindow(m, planActor?.role === 'ADMIN');
+    const exempt = await this.approvedWindowExemption(userId, m);
+    const pw = this.planWindow(m, planActor?.role === 'ADMIN', exempt);
     if (!pw.open) throw new BadRequestException(pw.hint);
     const cleaned: PbcItem[] = items
       .map((it) => ({ content: String(it?.content ?? '').trim(), score: Number(it?.score ?? 0) }))
@@ -1113,16 +1146,202 @@ export class PbcService {
   /**
    * 计划填写窗口：当月计划仅在该月 1~10 号可填写/提交（ADMIN 豁免）。
    * 历史月份（早于本月）不受限制——允许补填/补交，配合「历史月也能补自评」。
+   * approved=true 表示该成员该月有已批准的补写申请（错过窗口后经上级批准），同样放行。
    */
-  private planWindow(m: string, isAdmin: boolean): { open: boolean; hint: string } {
-    if (isAdmin) return { open: true, hint: '' };
+  private planWindow(m: string, isAdmin: boolean, approved = false): { open: boolean; hint: string } {
+    if (isAdmin || approved) return { open: true, hint: '' };
     const t = this.beijingToday();
     const mp = this.monthParts(m);
     // 早于本月 → 历史月，随时可补
     if (t.y * 12 + t.mo > mp.y * 12 + mp.mo) return { open: true, hint: '' };
     const open = t.y === mp.y && t.mo === mp.mo && t.d <= 10;
-    const hint = `当月 PBC 计划只能在 ${mp.y} 年 ${mp.mo} 月的 1~10 号填写/提交；更早的历史月份可随时补录（管理员不受限）`;
+    const hint = `当月 PBC 计划只能在 ${mp.y} 年 ${mp.mo} 月的 1~10 号填写/提交；更早的历史月份可随时补录（管理员不受限，错过窗口可向上级申请补写）`;
     return { open, hint };
+  }
+
+  /** 该成员该月是否存在「已批准」的补写申请（放行计划填写窗口） */
+  private async approvedWindowExemption(userId: string, month: string): Promise<boolean> {
+    const wr = await this.prisma.pbcWindowRequest.findUnique({
+      where: { ownerId_month: { ownerId: userId, month } },
+      select: { status: true },
+    });
+    return wr?.status === 'APPROVED';
+  }
+
+  /**
+   * 提交 PBC 计划补写申请：错过当月 1~10 号填写窗口时，向上级（部门管理者/直属上级/管理员）申请补写。
+   * - 窗口已开（在窗口内/历史月/ADMIN）无需申请；已批准的月份直接填写即可
+   * - 已驳回可修改理由重新提交（覆盖原申请回到 PENDING）；已有 PENDING 则更新理由
+   * - 提交后钉钉私聊通知审批人（fire-and-forget）
+   */
+  async requestWindow(userId: string, month: string, reason: string) {
+    if (!MONTH_RE.test((month ?? '').trim())) throw new BadRequestException('月份格式须为 YYYY-MM');
+    const m = month.trim();
+    const text = String(reason ?? '').trim();
+    if (!text) throw new BadRequestException('请填写申请理由');
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    const pw = this.planWindow(m, user?.role === 'ADMIN');
+    if (pw.open) throw new BadRequestException('当前已可填写该月 PBC 计划，无需申请补写');
+    const existing = await this.prisma.pbcWindowRequest.findUnique({ where: { ownerId_month: { ownerId: userId, month: m } } });
+    if (existing?.status === 'APPROVED') throw new BadRequestException('该月的补写申请已批准，可直接填写 PBC 计划');
+    await this.prisma.pbcWindowRequest.upsert({
+      where: { ownerId_month: { ownerId: userId, month: m } },
+      // 新申请 / 被驳回后重新申请（覆盖理由、审批痕迹清空）/ 待审批时更新理由
+      create: { ownerId: userId, month: m, reason: text },
+      update: { reason: text, status: 'PENDING', approverId: null, approverName: null, comment: null, decidedAt: null },
+    });
+    void this.notifyWindowRequest(userId, m, text);
+    return { month: m, status: 'PENDING' as const };
+  }
+
+  /**
+   * 补写申请清单：我自己的 + 我可审批的（部门管理者看所辖成员、直属上级看直接下属、ADMIN 看全部）。
+   * - month 省略时返回全部月份；每行附 canDecide 供前端决定是否展示批准/驳回按钮
+   */
+  async listWindowRequests(me: { id: string; role: string }, month?: string): Promise<PbcWindowRequestRow[]> {
+    const m = String(month ?? '').trim();
+    if (m && !MONTH_RE.test(m)) throw new BadRequestException('月份格式须为 YYYY-MM');
+    const where: Prisma.PbcWindowRequestWhereInput = {};
+    if (m) where.month = m;
+    if (me.role !== 'ADMIN') {
+      const led = await this.prisma.department.findMany({ where: ledDeptWhere(me.id), select: { id: true } });
+      const ledIds = led.map((d) => d.id);
+      const ors: Prisma.PbcWindowRequestWhereInput[] = [{ ownerId: me.id }, { owner: { reportsToId: me.id } }];
+      if (ledIds.length) ors.push({ owner: deptRosterWhere(ledIds) });
+      where.OR = ors;
+    }
+    const rows = await this.prisma.pbcWindowRequest.findMany({
+      where,
+      include: { owner: { select: this.ownerSelect() } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    return Promise.all(
+      rows.map(async (wr) => ({
+        id: wr.id,
+        ownerId: wr.ownerId,
+        ownerName: wr.owner.name,
+        department: wr.owner.department?.name ?? null,
+        month: wr.month,
+        reason: wr.reason,
+        status: wr.status as 'PENDING' | 'APPROVED' | 'REJECTED',
+        approverName: wr.approverName,
+        comment: wr.comment,
+        decidedAt: wr.decidedAt,
+        createdAt: wr.createdAt,
+        canDecide: wr.status === 'PENDING' && wr.ownerId !== me.id && (await this.canDecideWindowRequest(me, wr.ownerId)),
+      })),
+    );
+  }
+
+  /**
+   * 审批补写申请：批准 → 该成员该月计划窗口放行（可正常填写/提交，仍走既有审批流）；
+   * 驳回 → 成员可修改理由重新申请。审批后钉钉私聊通知成员（fire-and-forget）。
+   */
+  async decideWindowRequest(me: { id: string; role: string; name: string }, id: string, approve: boolean, comment?: string) {
+    const wr = await this.prisma.pbcWindowRequest.findUnique({ where: { id } });
+    if (!wr) throw new BadRequestException('补写申请不存在');
+    if (wr.status !== 'PENDING') throw new BadRequestException('该申请已处理，不能重复审批');
+    if (wr.ownerId === me.id) throw new ForbiddenException('不能审批自己的申请');
+    if (!(await this.canDecideWindowRequest(me, wr.ownerId))) throw new ForbiddenException('你不是该成员的上级/管理者，无权审批该申请');
+    const text = String(comment ?? '').trim() || null;
+    const updated = await this.prisma.pbcWindowRequest.update({
+      where: { id },
+      data: {
+        status: approve ? 'APPROVED' : 'REJECTED',
+        approverId: me.id,
+        approverName: me.name,
+        comment: text,
+        decidedAt: new Date(),
+      },
+    });
+    void this.notifyWindowDecision(wr.ownerId, me.name, wr.month, approve, text);
+    return { id, ownerId: wr.ownerId, month: wr.month, status: updated.status as 'APPROVED' | 'REJECTED' };
+  }
+
+  /** 当前用户是否为某成员补写申请的审批人：ADMIN / 直属上级 / 该成员所在部门（主 ∪ 额外）的管理者 */
+  private async canDecideWindowRequest(me: { id: string; role: string }, ownerId: string): Promise<boolean> {
+    if (me.role === 'ADMIN') return true;
+    const u = await this.prisma.user.findUnique({
+      where: { id: ownerId },
+      select: { reportsToId: true, departmentId: true, extraDepartments: { select: { id: true } } },
+    });
+    if (!u) return false;
+    if (u.reportsToId === me.id) return true;
+    const deptIds = [u.departmentId, ...(u.extraDepartments ?? []).map((d) => d.id)].filter(Boolean) as string[];
+    if (!deptIds.length) return false;
+    const depts = await this.prisma.department.findMany({ where: { id: { in: deptIds } }, select: { leaderId: true, managerIds: true } });
+    return depts.some((d) => isDeptAuthority(d, me.id));
+  }
+
+  /** 提交补写申请后通知审批人：默认打分上级 + 各部门管理者（去重、排除本人，fire-and-forget） */
+  private async notifyWindowRequest(ownerId: string, month: string, reason: string) {
+    try {
+      const owner = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { id: true, name: true } });
+      if (!owner) return;
+      const ids = new Set<string>();
+      const def = await this.resolveDefaultLeaderId(ownerId);
+      if (def) ids.add(def);
+      const u = await this.prisma.user.findUnique({
+        where: { id: ownerId },
+        select: { departmentId: true, extraDepartments: { select: { id: true } } },
+      });
+      const deptIds = [u?.departmentId, ...(u?.extraDepartments ?? []).map((d) => d.id)].filter(Boolean) as string[];
+      if (deptIds.length) {
+        const depts = await this.prisma.department.findMany({ where: { id: { in: deptIds } }, select: { leaderId: true, managerIds: true } });
+        for (const d of depts) for (const id of deptAuthorityIds(d)) if (id !== ownerId) ids.add(id);
+      }
+      const link = webLink('/reports?tab=pbc&view=review');
+      for (const id of ids) {
+        const leader = await this.prisma.user.findUnique({ where: { id }, select: { id: true, name: true, phone: true, active: true } });
+        if (!leader?.active) continue;
+        const text = [
+          `📨 ${owner.name} 申请补写 ${month} 的月度 PBC 计划（错过了 1~10 号填写窗口）。`,
+          `申请理由：${reason}`,
+          '如情况属实，请到「工作管理 → PBC → 待我审核」批准该申请；批准后 TA 即可补写该月计划。',
+          link,
+          '',
+          '—— 来自 MyOrgniz 团队协作系统',
+        ].join('\n');
+        const r = await this.dm.notifyUser(leader, text);
+        if (!r.sent) this.logger.warn(`PBC 补写申请通知失败（${owner.name} → ${leader.name}）: ${r.error ?? '未知'}`);
+      }
+    } catch (e) {
+      this.logger.error(`PBC 补写申请通知异常（已忽略）: ${(e as Error).message}`);
+    }
+  }
+
+  /** 补写申请审批结果通知成员（fire-and-forget，失败仅记日志） */
+  private async notifyWindowDecision(ownerId: string, approverName: string, month: string, approved: boolean, comment: string | null) {
+    try {
+      const u = await this.prisma.user.findUnique({ where: { id: ownerId }, select: { id: true, name: true, phone: true } });
+      if (!u) return;
+      const link = webLink('/reports?tab=pbc&view=plan');
+      const text = approved
+        ? [
+            `✅ ${approverName} 已批准你补写 ${month} 的月度 PBC 计划。`,
+            '登录 MyOrgniz → 工作管理 → PBC → 我的计划，现在可以填写并提交了（仍需上级审批）。',
+            comment ? `审批意见：${comment}` : '',
+            link,
+            '',
+            '—— 来自 MyOrgniz 团队协作系统',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : [
+            `❌ ${approverName} 驳回了你 ${month} 的 PBC 计划补写申请。`,
+            comment ? `驳回意见：${comment}` : '如确需补写，可修改理由后重新提交申请。',
+            link,
+            '',
+            '—— 来自 MyOrgniz 团队协作系统',
+          ]
+            .filter(Boolean)
+            .join('\n');
+      const r = await this.dm.notifyUser(u, text);
+      if (!r.sent) this.logger.warn(`PBC 补写申请审批结果通知失败（${u.name} → ${r.to}）: ${r.error ?? '未知'}`);
+    } catch (e) {
+      this.logger.error(`PBC 补写申请审批结果通知异常（已忽略）: ${(e as Error).message}`);
+    }
   }
 
   /**

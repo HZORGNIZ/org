@@ -752,6 +752,22 @@ export interface PbcDecomposeResult {
   defaultProjectId: string | null;
   degraded: boolean;
 }
+/** PBC 计划补写申请（错过 1~10 号窗口后向上级申请，批准后该月放行） */
+export interface PbcWindowRequestRow {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  department: string | null;
+  month: string;
+  reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  approverName: string | null;
+  comment: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  /** 当前查看者能否审批该申请（自己的申请恒为 false） */
+  canDecide: boolean;
+}
 export const pbcApi = {
   /** 我某月 PBC：month='YYYY-MM'，无记录返回空计划；附带考核轴（reviewStatus、self/leader 各列、leaderOptions、canSelfReview 等） */
   get: (month: string) =>
@@ -786,12 +802,29 @@ export const pbcApi = {
       planWindowHint: string;
       selfReviewWindowOpen: boolean;
       selfReviewWindow: string;
+      /** 我的计划补写申请（错过窗口后向上级申请）：null=未申请 */
+      planWindowRequest: {
+        id: string;
+        status: 'PENDING' | 'APPROVED' | 'REJECTED';
+        reason: string;
+        approverName: string | null;
+        comment: string | null;
+        decidedAt: string | null;
+        createdAt: string;
+      } | null;
       /** 最近一次「撤销定稿」留痕（管理员打回时展示给本人） */
       lastRevoke: { at: string; byName: string; note: string | null } | null;
     }>('/pbc', { month }),
   /** 保存我某月 PBC（事项+分值，合计须=100） */
   save: (month: string, items: { content: string; score: number }[]) =>
     api.post<{ month: string; items: { content: string; score: number }[]; total: number; status: PbcStatus; locked: boolean }>('/pbc', { month, items }),
+  /** 提交 PBC 计划补写申请：错过当月 1~10 号窗口时向上级申请，批准后该月可补写 */
+  requestWindow: (month: string, reason: string) => api.post<{ month: string; status: 'PENDING' }>('/pbc/window-request', { month, reason }),
+  /** 补写申请清单：我自己的 + 我可审批的（部门管理者/直属上级/ADMIN） */
+  windowRequests: () => api.get<PbcWindowRequestRow[]>('/pbc/window-requests'),
+  /** 审批补写申请：批准后成员该月计划窗口放行；驳回后成员可修改理由重新申请 */
+  decideWindow: (id: string, approve: boolean, comment?: string) =>
+    api.post<{ id: string; ownerId: string; month: string; status: 'APPROVED' | 'REJECTED' }>('/pbc/window-request/decide', { id, approve, comment }),
   /** 成员月度 PBC 概览（仅部门负责人/管理员）：本部门/全体启用成员及其 PBC */
   team: (month: string) => api.get<PbcRow[]>('/pbc/team', { month }),
   /** 部门内成员 PBC 互看（DepartmentView） */

@@ -26,6 +26,40 @@
       </div>
     </div>
 
+    <!-- 计划补写申请审批：成员错过 1~10 号填写窗口后提交的申请，批准后 TA 该月即可补写计划 -->
+    <div v-if="winReqs.length" class="rv-winreq">
+      <div class="rv-winreq-title">
+        <span>计划补写申请（错过 1~10 号填写窗口的成员）</span>
+        <el-button text type="primary" size="small" :loading="winLoading" @click="loadWinReqs">刷新</el-button>
+      </div>
+      <el-table :data="winReqs" size="small">
+        <el-table-column label="申请人" width="90" prop="ownerName" />
+        <el-table-column label="部门" width="110">
+          <template #default="{ row }"><span class="muted">{{ row.department || '未归属' }}</span></template>
+        </el-table-column>
+        <el-table-column label="月份" width="78" prop="month" />
+        <el-table-column label="申请理由" min-width="200">
+          <template #default="{ row }"><span class="rv-winreq-reason">{{ row.reason }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="170">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === 'PENDING'" size="small" type="warning" effect="plain">待审批</el-tag>
+            <el-tag v-else-if="row.status === 'APPROVED'" size="small" type="success" effect="plain">已批准 · {{ row.approverName || '' }}</el-tag>
+            <el-tag v-else size="small" type="info" effect="plain">已驳回 · {{ row.approverName || '' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="132">
+          <template #default="{ row }">
+            <template v-if="row.canDecide">
+              <el-button size="small" type="primary" plain @click="decideWin(row, true)">批准</el-button>
+              <el-button size="small" type="danger" plain @click="decideWin(row, false)">驳回</el-button>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <div v-if="!filtered.length && !loading" class="rv-empty muted">
       {{ statusFilter === 'done' ? '还没有已定稿的考核' : '当前没有待你审核的 PBC。成员提交自评后会出现在这里，补录的历史月份也会进来。' }}
     </div>
@@ -157,7 +191,7 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import dayjs from 'dayjs';
-import { pbcApi, type PbcRow } from '../api';
+import { pbcApi, type PbcRow, type PbcWindowRequestRow } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { fmt } from '../utils/format';
 
@@ -215,6 +249,53 @@ function overdueDays(r: QueueRow): number {
 function isOverdue(r: QueueRow): boolean {
   return r.reviewStatus === 'SELF_DONE' && overdueDays(r) > 0;
 }
+
+// ---- 计划补写申请审批（成员错过 1~10 号窗口后提交的申请） ----
+const winReqs = ref<PbcWindowRequestRow[]>([]);
+const winLoading = ref(false);
+
+async function loadWinReqs() {
+  winLoading.value = true;
+  try {
+    const rows = await pbcApi.windowRequests();
+    // 不展示自己的申请（自己的申请状态在「我的计划」页可见）；待审批排前，其余按提交时间倒序
+    winReqs.value = rows
+      .filter((r) => r.ownerId !== auth.user?.id)
+      .sort(
+        (a, b) =>
+          (a.status === 'PENDING' ? 0 : 1) - (b.status === 'PENDING' ? 0 : 1) ||
+          String(b.createdAt).localeCompare(String(a.createdAt)),
+      );
+  } finally {
+    winLoading.value = false;
+  }
+}
+
+/** 批准/驳回补写申请：批准后该成员该月即可填写 PBC 计划；意见选填 */
+async function decideWin(r: PbcWindowRequestRow, approve: boolean) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      approve
+        ? `批准 ${r.ownerName} 补写 ${r.month} 的月度 PBC 计划？批准后 TA 即可填写并提交该月计划（仍走正常审批）。可附审批意见：`
+        : `驳回 ${r.ownerName} 补写 ${r.month} PBC 计划的申请？TA 修改理由后可重新申请。可附驳回意见：`,
+      approve ? '批准补写申请' : '驳回补写申请',
+      {
+        type: approve ? 'info' : 'warning',
+        confirmButtonText: approve ? '确认批准' : '确认驳回',
+        cancelButtonText: '取消',
+        inputPlaceholder: '选填',
+      },
+    );
+    await pbcApi.decideWindow(r.id, approve, String(value ?? '').trim() || undefined);
+    ElMessage.success(approve ? `已批准：${r.ownerName} ${r.month} 可补写计划` : `已驳回：${r.ownerName} ${r.month} 的补写申请`);
+    await loadWinReqs();
+    // 通知父组件刷新（页签角标的「补写申请」计数）
+    emit('reviewed', { userId: r.ownerId, month: r.month });
+  } catch {
+    /* 取消 */
+  }
+}
+loadWinReqs();
 
 function initDraft(r: QueueRow | null) {
   if (!r) {
@@ -326,6 +407,23 @@ defineExpose({ load });
 <style scoped>
 .rv-wrap {
   margin-bottom: 14px;
+}
+/* 计划补写申请审批区 */
+.rv-winreq {
+  margin-bottom: 12px;
+}
+.rv-winreq-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.rv-winreq-reason {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .rv-head {
   display: flex;

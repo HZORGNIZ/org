@@ -253,6 +253,7 @@ model User {
   lastReportRemindAt DateTime? // 日报未写提醒：上次钉钉私聊提醒时间（每人每个北京日最多提醒一次）
   workSlots   UserWorkSlot[] // 我的工作时间安排（每周固定时间段，决定当天是否属于应发日报人员）
   pbc         Pbc[] // 月度 PBC（个人业务承诺）
+  pbcWindowRequests PbcWindowRequest[] // PBC 计划补写申请（错过 1~10 号窗口后向上级申请）
   agentSessions AgentSession[] // 管理者 Agent 悬浮窗会话历史
 
   department     Department? @relation("DeptMembers", fields: [departmentId], references: [id], onDelete: SetNull)
@@ -1023,6 +1024,34 @@ model Pbc {
 
   @@unique([ownerId, month])
   @@index([month])
+}
+
+// PBC 计划补写申请：成员错过当月 1~10 号计划填写窗口后，可向上级（部门管理者/直属上级/管理员）
+// 提交补写申请；上级批准后该成员该月视为窗口开放，可正常填写/提交 PBC 计划（走既有审批流）。
+// 每人每月最多一条申请（驳回后可重新提交覆盖）。
+enum PbcWindowRequestStatus {
+  PENDING // 待上级审批
+  APPROVED // 已批准（该月计划窗口放行）
+  REJECTED // 已驳回（可修改理由重新申请）
+}
+
+model PbcWindowRequest {
+  id           String   @id @default(cuid())
+  ownerId      String // 申请人
+  month        String // 'YYYY-MM'（北京口径自然月）
+  reason       String // 申请理由（为什么错过窗口/需要补写）
+  status       PbcWindowRequestStatus @default(PENDING)
+  approverId   String? // 审批人 userId
+  approverName String? // 审批人姓名快照
+  comment      String? // 审批意见（批准/驳回均可附）
+  decidedAt    DateTime? // 审批时间
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, month])
+  @@index([status])
 }
 
 // PBC 考核动作留痕：目前只记「撤销定稿」（ADMIN 把已定稿打回待审核）。
