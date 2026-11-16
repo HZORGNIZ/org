@@ -255,6 +255,9 @@ model User {
   pbc         Pbc[] // 月度 PBC（个人业务承诺）
   pbcWindowRequests PbcWindowRequest[] // PBC 计划补写申请（错过 1~10 号窗口后向上级申请）
   agentSessions AgentSession[] // 管理者 Agent 悬浮窗会话历史
+  bookingAsOwner MeetingBooking[] @relation("BookingOwner") // 别人约我（我是被约的老师）
+  bookingAsRequester MeetingBooking[] @relation("BookingRequester") // 我发起的预约
+  timeSlots UserTimeSlot[] // 一次性可约/不可约时段（老师临时调整）
 
   department     Department? @relation("DeptMembers", fields: [departmentId], references: [id], onDelete: SetNull)
   reportsTo      User?    @relation("UserReports", fields: [reportsToId], references: [id], onDelete: SetNull)
@@ -1353,6 +1356,47 @@ model AgentSession {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, updatedAt])
+}
+
+// ========== 约时间（专属机器人「约苏苏老师 / 约杨老师」） ==========
+
+// 一次性时段：老师在具体某天临时说「下午2点后有空 / 上午没空」，与 UserWorkSlot（每周固定模板）叠加生效
+model UserTimeSlot {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime // 当天 00:00（北京墙钟字面量）
+  startMin  Int // 当天分钟数，如 14:00 = 840
+  endMin    Int
+  kind      String   @default("FREE") // FREE=临时可约 / BUSY=临时不可约
+  note      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+// 沟通预约：成员通过「约XX老师」机器人发起，老师确认后生效
+model MeetingBooking {
+  id          String    @id @default(cuid())
+  ownerId     String // 被约的老师
+  requesterId String // 发起预约的成员
+  title       String    @default("沟通预约")
+  note        String?
+  startAt     DateTime
+  endAt       DateTime
+  status      String    @default("PENDING") // PENDING=待老师确认 / CONFIRMED / REJECTED / CANCELLED
+  decideNote  String? // 老师确认/驳回时的意见
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner     User @relation("BookingOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  requester User @relation("BookingRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, startAt])
+  @@index([requesterId, startAt])
+  @@index([status])
 }
 
 // 团队级配置（KV）

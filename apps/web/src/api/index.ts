@@ -422,6 +422,21 @@ export const agentApi = {
     api.post<{ ok: boolean; id: string }>('/agent/sessions', data),
   /** 删除自己的会话 */
   deleteSession: (id: string) => api.del<any>(`/agent/sessions/${id}`),
+  /** 我相关的预约：谁约了我（asOwner）/ 我约了谁（asRequester） */
+  listBookings: () =>
+    api.get<{
+      asOwner: { id: string; title: string; note: string | null; status: string; decideNote: string | null; start: string; end: string; who: string }[];
+      asRequester: { id: string; title: string; note: string | null; status: string; decideNote: string | null; start: string; end: string; who: string }[];
+    }>('/agent/bookings'),
+  /** 发起沟通预约（约XX老师机器人确认卡执行用）：服务端校验冲突并钉钉私聊通知老师 */
+  createBooking: (data: { ownerId: string; startAt: string; endAt: string; title?: string; note?: string }) =>
+    api.post<{ ok: boolean; id: string }>('/agent/bookings', data),
+  /** 老师审批预约：approve=true 批准 / false 驳回（可附原因），结果通知发起人 */
+  decideBooking: (id: string, data: { approve: boolean; note?: string }) =>
+    api.post<{ ok: boolean; status: string }>(`/agent/bookings/${id}/decide`, data),
+  /** 老师登记一次性时段（临时可约/不可约），只能写自己的 */
+  setTimeSlot: (data: { date: string; startMin: number | string; endMin: number | string; kind?: string; note?: string }) =>
+    api.post<{ ok: boolean; id: string; date: string; range: string; kind: string }>('/agent/time-slots', data),
 };
 
 // ---------- 使用体验反馈（首页提交、落库后同步公司群；后台按状态管理 + AI 总结） ----------
