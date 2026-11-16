@@ -415,8 +415,12 @@ export const agentApi = {
     api.get<{ sessions: { id: string; title: string; botType?: string; messageCount: number; updatedAt: string; createdAt: string }[] }>(
       `/agent/sessions${bot ? `?bot=${encodeURIComponent(bot)}` : ''}`,
     ),
-  /** 读取单个会话正文 */
-  getSession: (id: string) => api.get<{ id: string; title: string; botType?: string; messages: any[]; updatedAt: string }>(`/agent/sessions/${id}`),
+  /** 读取单个会话正文（silent：会话可能已被删除，由调用方静默回落新会话，不弹全局错误） */
+  getSession: (id: string) =>
+    http.get<{ id: string; title: string; botType?: string; messages: any[]; updatedAt: string }, { id: string; title: string; botType?: string; messages: any[]; updatedAt: string }>(
+      `/agent/sessions/${id}`,
+      { silent: true } as any,
+    ),
   /** 保存/新建会话（传 id 则更新，不传则新建；bot=归属机器人；返回服务端会话 id） */
   saveSession: (data: { id?: string; title?: string; messages: any[]; bot?: string }) =>
     api.post<{ ok: boolean; id: string }>('/agent/sessions', data),

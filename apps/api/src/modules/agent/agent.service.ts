@@ -1680,7 +1680,8 @@ export class AgentService {
       take: 10,
       select: { id: true, title: true, note: true, startAt: true, endAt: true, requester: { select: { name: true } } },
     });
-    const avail = await this.computeAvailability(owner.id, now, this.addDays(now, 7));
+    // 按「天」归一化：computeAvailability 以入参当天零点为基准逐日迭代，传当前时刻会让首日边界错位
+    const avail = await this.computeAvailability(owner.id, this.bjDayStart(now), this.bjDayStart(this.addDays(now, 7)));
     const freeDays = avail.days
       .filter((d) => d.free.length)
       .map((d) => `${d.date}（${d.weekday}）${d.free.join('、')}${d.note ? `［${d.note}］` : ''}`);
@@ -3618,12 +3619,14 @@ export class AgentService {
     const botType = normBotKey(body?.bot);
     if (body?.id) {
       const owned = await this.prisma.agentSession.findFirst({ where: { id: body.id, userId: me.id }, select: { id: true } });
-      if (!owned) throw new NotFoundException('会话不存在或无权访问');
-      const updated = await this.prisma.agentSession.update({
-        where: { id: body.id },
-        data: { title, messages: msgs as any, messageCount: msgs.length, botType },
-      });
-      return { ok: true, id: updated.id };
+      // 会话已被删除/换了账号/被裁剪：不再报 404 打断用户，直接落成新会话（内容不丢，前端拿新 id 继续接续）
+      if (owned) {
+        const updated = await this.prisma.agentSession.update({
+          where: { id: body.id },
+          data: { title, messages: msgs as any, messageCount: msgs.length, botType },
+        });
+        return { ok: true, id: updated.id };
+      }
     }
     const created = await this.prisma.agentSession.create({
       data: { userId: me.id, title, messages: msgs as any, messageCount: msgs.length, botType } as any,

@@ -61,9 +61,13 @@ http.interceptors.response.use(
       }
     } else {
       // 校验类错误 message 可能为数组（class-validator），取首条提示
-      ElMessage.error(
-        Array.isArray(msg) ? msg[0] : typeof msg === 'string' ? msg : '请求失败，请稍后重试',
-      );
+      // silent=true 的请求由调用方自行处理（如可选资源读不到属正常情况，不该弹错）
+      const silent = (err.config as any)?.silent === true;
+      if (!silent) {
+        ElMessage.error(
+          Array.isArray(msg) ? msg[0] : typeof msg === 'string' ? msg : '请求失败，请稍后重试',
+        );
+      }
     }
     return Promise.reject(err);
   },

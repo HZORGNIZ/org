@@ -341,6 +341,8 @@ const BOT_CHIPS: Record<string, string[]> = {
 function botIdKey() {
   return botKey.value === 'general' ? activeIdKey() : `${activeIdKey()}:${botKey.value}`;
 }
+/** 上次选择的机器人：单独存一个 key，绝不能塞进「会话指针」槽位（否则会被当成会话 id 去查，必然 404） */
+const BOT_SELECT_KEY = 'myorgniz_agent_bot';
 async function loadBots() {
   try {
     const cfg: any = await agentApi.getConfig();
@@ -348,8 +350,11 @@ async function loadBots() {
   } catch {
     /* 拉取失败用兜底清单，功能不塌 */
   }
-  const saved = localStorage.getItem(botIdKey());
+  const saved = localStorage.getItem(BOT_SELECT_KEY);
   if (saved && bots.value.some((b) => b.key === saved)) botKey.value = saved;
+  // 清洗历史版本写错的指针（旧代码把机器人 key 写进了会话指针槽，导致每次进来都报「会话不存在」）
+  const stale = localStorage.getItem(activeIdKey());
+  if (stale && bots.value.some((b) => b.key === stale)) localStorage.removeItem(activeIdKey());
 }
 /** 切换机器人：保存当前会话 → 清屏 → 接续该机器人上次会话（没有就空会话出开场白） */
 async function switchBot(key: string) {
@@ -357,7 +362,7 @@ async function switchBot(key: string) {
   clearTimeout(saveTimer);
   if (msgs.value.length) await persistSession();
   botKey.value = key;
-  localStorage.setItem(botIdKey(), key);
+  localStorage.setItem(BOT_SELECT_KEY, key);
   msgs.value = [];
   sessionId.value = null;
   showHistory.value = false;
@@ -373,7 +378,9 @@ async function switchBot(key: string) {
         return;
       }
     } catch {
-      /* 会话没了：保持空会话 */
+      // 会话没了/指针失效：清掉该机器人的会话指针，保持空会话（不弹错）
+      localStorage.removeItem(botIdKey());
+      sessionId.value = null;
     }
   }
 }
@@ -568,6 +575,9 @@ function loadHistory(): Promise<void> {
         }
       })
       .catch(() => {
+        // 会话已不存在（被删/换账号/被裁剪）：清掉失效指针，回落本地镜像，下次保存自动新建
+        sessionId.value = null;
+        localStorage.removeItem(botIdKey());
         msgs.value = mirror;
       });
   }
@@ -606,7 +616,9 @@ async function persistSession() {
       localStorage.setItem(botIdKey(), r.id);
     }
   } catch {
-    /* 服务端不可用时本地镜像仍在，下次自动重试 */
+    // 会话 id 失效或服务端不可用：先清指针，下次保存自动新建（内容仍在本地镜像，不会丢）
+    sessionId.value = null;
+    localStorage.removeItem(botIdKey());
   }
 }
 function clearChat() {
@@ -651,7 +663,17 @@ async function openSession(id: string) {
     showHistory.value = false;
     scrollBottom();
   } catch (e: any) {
-    ElMessage.error(`打开会话失败：${e?.message ?? e}`);
+    // 会话已被删除/裁剪：清掉列表里的失效项，静默回落到新会话（不弹"会话不存在"打扰）
+    if (e?.response?.status === 404) {
+      sessions.value = sessions.value.filter((s) => s.id !== id);
+      localStorage.removeItem(botIdKey());
+      sessionId.value = null;
+      msgs.value = [];
+      showHistory.value = false;
+      ElMessage.info('该会话已被删除，已为你开启新会话');
+    } else {
+      ElMessage.error(`打开会话失败：${e?.message ?? e}`);
+    }
   }
 }
 async function removeSession(id: string) {
