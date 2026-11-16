@@ -123,4 +123,36 @@ export class AgentController {
   deleteSession(@CurrentUser() me: CurrentUserPayload, @Param('id') id: string) {
     return this.agent.deleteSession(me, id);
   }
+
+  // ---- 约时间（约书书老师 / 约杨老师）：确认卡片执行用 ----
+
+  /** 我相关的预约：谁约了我 / 我约了谁（按本人收敛） */
+  @Get('bookings')
+  listBookings(@CurrentUser() me: CurrentUserPayload) {
+    return this.agent.listBookings(me);
+  }
+
+  /** 发起预约（任意成员）：冲突校验 + 建单 + 钉钉私聊通知老师 */
+  @Post('bookings')
+  createBooking(
+    @CurrentUser() me: CurrentUserPayload,
+    @Body() body: { ownerId?: string; startAt?: string; endAt?: string; title?: string; note?: string },
+  ) {
+    return this.agent.createBooking(me, body ?? {});
+  }
+
+  /** 老师审批预约：批准=确认，驳回可附原因；结果通知发起人 */
+  @Post('bookings/:id/decide')
+  decideBooking(@CurrentUser() me: CurrentUserPayload, @Param('id') id: string, @Body() body: { approve?: boolean; note?: string }) {
+    return this.agent.decideBooking(me, id, body ?? {});
+  }
+
+  /** 老师登记一次性时段（临时可约/不可约）：只能写自己的 */
+  @Post('time-slots')
+  setTimeSlot(
+    @CurrentUser() me: CurrentUserPayload,
+    @Body() body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; note?: string },
+  ) {
+    return this.agent.setTimeSlot(me, body ?? {});
+  }
 }

@@ -78,6 +78,19 @@
     </div>
 
     <div v-else ref="listEl" class="agent-list">
+      <!-- 约时间机器人身份卡：老师本人=别人约我的待确认记录；访客=我约该老师的记录 -->
+      <div v-if="curBot?.scheduleOwner && !schedCardDismissed && (schedulePending.length || scheduleMine.length)" class="agent-sched-card">
+        <div class="agent-sched-hd">
+          <span>{{ isScheduleOwner ? `📅 别人约「${curBot.scheduleOwner}老师」的记录（${schedulePending.length} 条待确认）` : `📅 我约「${curBot.scheduleOwner}老师」的记录` }}</span>
+          <button class="agent-mini-btn" @click="schedCardDismissed = true">收起</button>
+        </div>
+        <div v-for="b in isScheduleOwner ? schedulePending : scheduleMine" :key="b.id" class="agent-sched-item">
+          <span class="agent-sched-time">{{ b.start }} ~ {{ b.end }}</span>
+          <span class="agent-sched-who">{{ isScheduleOwner ? `${b.who} · ` : '' }}{{ b.title || '未填事由' }}</span>
+          <span class="agent-sched-status" :class="'sched-st-' + b.status.toLowerCase()">{{ schedStatusCn(b.status) }}</span>
+        </div>
+        <div class="agent-sched-tip">{{ isScheduleOwner ? '直接在下面回复「同意 / 驳回 + 理由」，或说出你的空闲时间，我来安排并答复对方。' : '想改时间或取消，直接在下面告诉老师的约时间助理。' }}</div>
+      </div>
       <div v-if="!msgs.length" class="agent-empty">
         <!-- 专属机器人：空会话先给开场白（人设来自后端注册表）；万能管家保留完整欢迎屏 -->
         <div v-if="botKey !== 'general'" class="agent-bot-greet">
@@ -305,7 +318,7 @@ const hdSub = computed(() =>
 );
 
 // ---- 专属机器人：清单来自 /agent/config（后端注册表，按档位收敛）；会话按机器人分档案 ----
-interface BotMeta { key: string; name: string; short: string; desc: string; greeting: string; placeholder: string }
+interface BotMeta { key: string; name: string; short: string; desc: string; greeting: string; placeholder: string; scheduleOwner?: string | null }
 const FALLBACK_BOTS: BotMeta[] = [
   { key: 'general', name: '万能管家', short: '万能', desc: '什么都能问的兜底大管家', greeting: '我是万能管家，查进度、写日报、发通知都可以找我。', placeholder: '问问万能管家…' },
 ];
@@ -320,6 +333,8 @@ const BOT_CHIPS: Record<string, string[]> = {
   meeting: ['我今天有没有会要参加？', '帮我把刚才的会整理成纪要', '项目成员最近在忙什么？'],
   chase: ['今天谁还没交日报？帮我催一下', '这周谁还没交周报？催一下', '谁有逾期任务？发群催办', '有风险项目要提醒负责人吗？'],
   notice: ['下午 3 点开个项目周会', '把通知发到公司群', '发布我的会议草稿'],
+  shushu: ['书书老师这周什么时候有空？', '帮我约书书老师周三下午聊 30 分钟', '查我约书书老师的进度', '这周我（本人）的安排'],
+  yangli: ['杨力老师这周什么时候有空？', '帮我约杨老师明天上午聊 30 分钟', '查我约杨老师的进度', '这周我（本人）的安排'],
 };
 
 /** 每个机器人各记各的活动会话指针（万能管家沿用旧 key，老用户的接续不受影响） */
@@ -346,6 +361,7 @@ async function switchBot(key: string) {
   msgs.value = [];
   sessionId.value = null;
   showHistory.value = false;
+  void loadScheduleCard();
   const sid = localStorage.getItem(botIdKey());
   if (sid) {
     try {
@@ -360,6 +376,33 @@ async function switchBot(key: string) {
       /* 会话没了：保持空会话 */
     }
   }
+}
+
+/** 约时间机器人身份卡：老师本人=别人约我的待确认记录；访客=我约该老师的进行中记录 */
+const schedulePending = ref<any[]>([]);
+const scheduleMine = ref<any[]>([]);
+const schedCardDismissed = ref(false);
+const isScheduleOwner = computed(() => !!curBot.value?.scheduleOwner && (auth.user?.name ?? '') === curBot.value.scheduleOwner);
+async function loadScheduleCard() {
+  schedulePending.value = [];
+  scheduleMine.value = [];
+  schedCardDismissed.value = false;
+  const owner = curBot.value?.scheduleOwner;
+  if (!owner) return;
+  try {
+    const r: any = await agentApi.listBookings();
+    if (isScheduleOwner.value) {
+      schedulePending.value = (r?.asOwner ?? []).filter((b: any) => b.status === 'PENDING');
+    } else {
+      scheduleMine.value = (r?.asRequester ?? []).filter((b: any) => b.who === owner && ['PENDING', 'CONFIRMED'].includes(b.status));
+    }
+  } catch {
+    /* 拉取失败不出卡片 */
+  }
+}
+const SCHED_STATUS_CN: Record<string, string> = { PENDING: '待确认', CONFIRMED: '已确认', REJECTED: '已驳回', CANCELLED: '已取消' };
+function schedStatusCn(s: string) {
+  return SCHED_STATUS_CN[s] ?? s;
 }
 
 /** 空态能力云已迁到 AgentWelcome.vue（按三档重写）；这里只保留输入框上方常驻快捷问与首屏速览数据 */
@@ -793,6 +836,25 @@ function actionRows(a: any) {
     for (const it of a.items ?? []) push(`${it.leader}·${it.project}`, `${it.level}${it.healthPercent !== null && it.healthPercent !== undefined ? ` · 健康度 ${it.healthPercent}%` : ''}${it.topRisk ? `：${it.topRisk}` : ''}`);
     for (const l of a.leaders ?? []) push(`提醒·${l.name}`, `${l.projectNames.join('、')}${(l.groupNames ?? []).length ? `（发到：${l.groupNames.join('、')}）` : '（无绑定项目群，只发站内信）'}`);
     push('说明', a.note ?? '每位负责人只收到自己那几个项目；发送前系统重扫风险名单');
+  } else if (a.kind === 'BOOKING_CREATE') {
+    push('被约人', a.ownerName);
+    push('发起人', a.requesterName);
+    push('时间', `${a.startLabel} ~ ${a.endLabel}（${a.durationMin} 分钟）`);
+    push('事由', a.title);
+    if (a.note) push('补充', a.note);
+    push('说明', a.hint ?? '确认后老师会收到钉钉私聊，老师同意后预约才生效');
+  } else if (a.kind === 'TIME_SLOT_SET') {
+    push('日期', `${a.date}（${a.weekday}）`);
+    push('时段', a.range);
+    push('类型', a.kindCode === 'BUSY' ? '临时不可约' : '临时可约');
+    if (a.note) push('备注', a.note);
+    push('说明', '只影响这一天，不改每周固定排班');
+  } else if (a.kind === 'BOOKING_DECIDE') {
+    push('预约', `${a.requesterName} · ${a.title}`);
+    push('时间', `${a.startLabel} ~ ${a.endLabel}`);
+    if (a.note) push('对方说明', a.note);
+    push('处理', a.approve ? '批准（确认这个时间）' : '驳回');
+    if (a.decideNote) push('给你的意见', a.decideNote);
   }
   return rows;
 }
@@ -910,6 +972,15 @@ async function confirmAction(m: AgentMsg) {
           ((r?.failedGroups ?? 0) ? `（${r.failedGroups} 个群发送失败）` : '');
       }
       m.link = '/projects';
+    } else if (a.kind === 'BOOKING_CREATE') {
+      await agentApi.createBooking({ ownerId: a.ownerId, startAt: a.startAt, endAt: a.endAt, title: a.title, note: a.note ?? undefined });
+      resultLabel = `已向 ${a.ownerName} 发出预约：${a.startLabel}~${a.endLabel}（老师确认后生效）`;
+    } else if (a.kind === 'TIME_SLOT_SET') {
+      await agentApi.setTimeSlot({ date: a.date, startMin: a.startMin, endMin: a.endMin, kind: a.kindCode, note: a.note ?? undefined });
+      resultLabel = `已把 ${a.date} ${a.range} 登记为${a.kindCode === 'BUSY' ? '临时不可约' : '临时可约'}`;
+    } else if (a.kind === 'BOOKING_DECIDE') {
+      await agentApi.decideBooking(a.bookingId, { approve: !!a.approve, note: a.decideNote ?? undefined });
+      resultLabel = a.approve ? `已批准 ${a.requesterName} 的预约（${a.startLabel}）` : `已驳回 ${a.requesterName} 的预约，并通知了对方`;
     } else {
       throw new Error('不支持的操作类型');
     }
@@ -1037,6 +1108,7 @@ onMounted(() => {
   void loadOverview(); // 首屏欢迎屏的今日速览（无论哪入口都预取，空会话时直接展示）
   void loadBots().then(() => {
     // 先确定当前机器人（含恢复上次选择），再按机器人接续会话
+    void loadScheduleCard();
     if (embeddedLike.value) void start();
     else loadHistory();
   });
@@ -1275,6 +1347,24 @@ defineExpose({ checkConfig, start });
 .agent-bot-greet { text-align: left; padding: 8px 4px; }
 .agent-bot-greet .agent-bubble-agent { white-space: pre-wrap; }
 .agent-bot-desc { font-size: 11px; color: #9ca3af; margin-top: 8px; padding-left: 4px; }
+/* 约时间机器人身份卡（老师本人=待确认预约；访客=我的预约） */
+.agent-sched-card {
+  margin: 0 4px 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  background: #f0f7ff;
+  border-radius: 10px;
+  text-align: left;
+}
+.agent-sched-hd { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; color: #1d4ed8; margin-bottom: 6px; }
+.agent-sched-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #374151; padding: 3px 0; }
+.agent-sched-time { color: #6b7280; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agent-sched-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-sched-status { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.sched-st-pending { background: #fef3c7; color: #92400e; }
+.sched-st-confirmed { background: #dcfce7; color: #166534; }
+.sched-st-rejected, .sched-st-cancelled { background: #fee2e2; color: #991b1b; }
+.agent-sched-tip { font-size: 11px; color: #6b7280; margin-top: 6px; }
 /* 空会话能力清单：分组 + 每条都可点 */
 .agent-cap-hd { color: #6b7280; margin-bottom: 8px; }
 .agent-cap-group { margin-bottom: 6px; }

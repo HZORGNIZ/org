@@ -1,10 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, Role } from '@prisma/client';
+import { NotificationType, Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { ReportsService, normalizeHours } from '../reports/reports.service';
 import { WorkScheduleService } from '../reports/work-schedule.service';
-import { WORK_SLOT_PRESETS, WORK_WEEKDAY_LABELS, slotRangeLabel, slotsHours, weekdayLabel } from '../../common/work-slots';
+import { WORK_SLOT_PRESETS, WORK_WEEKDAY_LABELS, fmtMinuteOfDay, slotRangeLabel, slotsHours, weekdayLabel } from '../../common/work-slots';
 import { ProjectsService } from '../projects/projects.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TasksService } from '../tasks/tasks.service';
@@ -13,7 +13,7 @@ import { SopsService } from '../sops/sops.service';
 import { DingtalkDmService } from '../integrations/dingtalk-dm.service';
 import { DingtalkFetchService } from '../integrations/dingtalk-fetch.service';
 import { CurrentUserPayload } from '../../common/current-user.decorator';
-import { beijingMondayDate, beijingMondayOf, fmtBeijing, fmtBeijingDate } from '../../common/beijing-time';
+import { CN_OFFSET_MS, beijingMondayDate, beijingMondayOf, fmtBeijing, fmtBeijingDate } from '../../common/beijing-time';
 import { deptOfProjectAuthority, ledDeptWhere } from '../../common/dept-authority';
 import { dailyBodyOf } from '../../common/daily-body';
 import { webLink } from '../../common/web-link';
@@ -34,6 +34,7 @@ export const COMPANY_GROUP_NAME = '杭州红蛛科技有限公司';
  * 任何「看别人进度」的工具都不放开，避免放开入口等于放开数据
  * list_meetings 对非管理员已按 owner/参会/材料上传人自收敛，成员用它只能查到「自己的会议」，安全
  * my_ranking/my_work_schedule 只回「我是第几名 / 共几人」与自己的排班，不含任何他人姓名与数值
+ * owner_availability/owner_agenda/owner_bookings：约时间机器人专用，只查机器人绑定的那一位老师（老板本人授权公开的空档）
  */
 const MEMBER_TOOLS = new Set([
   'my_tasks',
@@ -43,13 +44,16 @@ const MEMBER_TOOLS = new Set([
   'list_meetings',
   'my_ranking',
   'my_work_schedule',
+  'owner_availability',
+  'owner_agenda',
+  'owner_bookings',
   // 项目 AI 员工三件套：只在项目页上下文里可用，数据严格按项目收敛（文件/在线文档/成员日报），成员档也放行
   'project_files',
   'read_project_doc',
   'project_reports',
 ]);
 /** 员工档可用的动作：只能改自己的任务/交自己的日报周报/安排自己的工作时间；会议、催办、下发、广播一律不给 */
-const MEMBER_ACTIONS = new Set(['TASK_PATCH', 'DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET']);
+const MEMBER_ACTIONS = new Set(['TASK_PATCH', 'DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']);
 
 /** 允许的动作类型：后端只生成计划，执行由前端确认后调现有接口或 /agent 执行路由（建任务/催逾期/广播通知均走后者，需叠加通知副作用） */
 const ACTION_KINDS = new Set([
@@ -67,6 +71,9 @@ const ACTION_KINDS = new Set([
   'WORK_SCHEDULE_SET',
   'DAILY_CHASE',
   'RISK_ALERT',
+  'BOOKING_CREATE',
+  'TIME_SLOT_SET',
+  'BOOKING_DECIDE',
 ]);
 
 // ---- 专属机器人注册表 ----
@@ -88,6 +95,8 @@ export interface AgentBotDef {
   managersOnly?: boolean;
   /** PROMPTS.md 里的提示词块名 */
   prompt: string;
+  /** 约时间机器人专用：被约老师的账号姓名（运行时解析成 userId，工具只查此人、动作只写此人日程） */
+  ownerName?: string;
   tools: Set<string> | null;
   actions: Set<string> | null;
 }
@@ -183,6 +192,33 @@ export const AGENT_BOTS: AgentBotDef[] = [
     tools: new Set(['list_meetings', 'group_options', 'list_projects', 'search_knowledge', 'search_sop']),
     actions: new Set(['MEETING_CREATE', 'MEETING_PUBLISH', 'MEETING_NOTIFY', 'NOTIFY_BROADCAST']),
   },
+  // ---- 约时间机器人：一人一个，绑定老师账号；成员查空档+发起预约，老师本人登记空闲/审批预约 ----
+  {
+    key: 'shushu',
+    name: '约书书老师',
+    short: '书',
+    desc: '专约书书老师的时间：先查她哪段空着再发预约；书书老师本人可登记临时空闲、看自己的安排，冲突时由助手代为回复成员',
+    greeting:
+      '我是书书老师的约时间助理。想找书书老师沟通：告诉我大概日期、时长和事由，我先查她的空档再帮你发预约。\n书书老师本人也可以直接说「周三下午 2 点后有空」，我帮你记进可约时间；有人约你时我会先向你汇报，时间冲突可以让我直接回复对方。',
+    placeholder: '想约书书老师？说说日期时长和事由…',
+    ownerName: '书书',
+    prompt: 'manager.bot.schedule',
+    tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
+    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
+  },
+  {
+    key: 'yangli',
+    name: '约杨老师',
+    short: '杨',
+    desc: '专约杨力老师的时间：先查他哪段空着再发预约；杨力老师本人可登记临时空闲、看自己的安排',
+    greeting:
+      '我是「约杨老师」小助手。想找杨力老师沟通：告诉我大概日期、时长和事由，我先查他的空档再帮你发预约。\n杨力老师本人也可以直接说「周四上午有空」，我帮你记进可约时间。',
+    placeholder: '想约杨力老师？说说日期时长和事由…',
+    ownerName: '杨力',
+    prompt: 'manager.bot.schedule',
+    tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
+    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
+  },
 ];
 
 const BOT_KEYS = new Set(AGENT_BOTS.map((b) => b.key));
@@ -193,7 +229,7 @@ function normBotKey(raw: unknown): string {
   return BOT_KEYS.has(k) ? k : 'general';
 }
 
-/** 当前档位可见的机器人清单（config 返回给前端渲染头像栏） */
+/** 当前档位可见的机器人清单（config 返回给前端渲染头像栏）；scheduleOwner=约时间机器人绑定的老师名 */
 function botsForTier(tier: string) {
   return AGENT_BOTS.filter((b) => !b.managersOnly || tier === 'manager').map((b) => ({
     key: b.key,
@@ -202,6 +238,7 @@ function botsForTier(tier: string) {
     desc: b.desc,
     greeting: b.greeting,
     placeholder: b.placeholder,
+    scheduleOwner: b.ownerName ?? null,
   }));
 }
 
@@ -377,6 +414,8 @@ export class AgentService {
       bot.key !== 'general'
         ? `【当前专属机器人】${bot.name}（${bot.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切换「万能管家」，绝不承诺自己做不到的事。`
         : '',
+      // 约时间机器人：被约老师是谁、当前说话的人是不是本人（决定「能登记空闲/审批」还是「只能查空档+发预约」）
+      bot.ownerName ? await this.buildScheduleBotContext(me, bot) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -658,6 +697,12 @@ export class AgentService {
           return await this.toolTeamRanking(me, scope, args);
         case 'my_work_schedule':
           return await this.toolMyWorkSchedule(me);
+        case 'owner_availability':
+          return await this.toolOwnerAvailability(bot, args);
+        case 'owner_agenda':
+          return await this.toolOwnerAgenda(me, bot, args);
+        case 'owner_bookings':
+          return await this.toolOwnerBookings(me, bot, args);
         default:
           return { error: `未知工具「${tool}」，请从清单中选择` };
       }
@@ -1423,6 +1468,352 @@ export class AgentService {
     };
   }
 
+  // ---- 约时间机器人（约书书老师 / 约杨老师）：空档计算 + 预约读写 ----
+
+  /** 解析机器人绑定的老师账号：姓名精确优先；未绑定/已停用返回 null（模型据此如实告知，不编造） */
+  private async resolveBotOwner(bot?: AgentBotDef): Promise<{ id: string; name: string; phone: string | null } | null> {
+    const target = String(bot?.ownerName ?? '').trim();
+    if (!target) return null;
+    const rows = await this.prisma.user.findMany({
+      where: { active: true, name: { contains: target } },
+      select: { id: true, name: true, phone: true },
+      take: 10,
+    });
+    return rows.find((r) => normName(r.name) === normName(target)) ?? rows[0] ?? null;
+  }
+
+  /** 北京当天 00:00 的绝对时刻 */
+  private bjDayStart(now = new Date()): Date {
+    const bj = new Date(now.getTime() + CN_OFFSET_MS);
+    return new Date(Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate()) - CN_OFFSET_MS);
+  }
+
+  /** 'YYYY-MM-DD'（北京日期）→ 当天 00:00 绝对时刻 */
+  private parseBjDay(raw: unknown): Date | null {
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(raw ?? '').trim());
+    if (!m) return null;
+    return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - CN_OFFSET_MS);
+  }
+
+  private addDays(d: Date, n: number): Date {
+    return new Date(d.getTime() + n * 86400000);
+  }
+
+  /** 北京周几（0=周一，与 UserWorkSlot.weekday 一致） */
+  private bjWeekdayOf(d: Date): number {
+    const bj = new Date(d.getTime() + CN_OFFSET_MS);
+    return (bj.getUTCDay() + 6) % 7;
+  }
+
+  /** 时刻 → 北京当天分钟数 */
+  private bjMinuteOfDay(d: Date): number {
+    const bj = new Date(d.getTime() + CN_OFFSET_MS);
+    return bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  }
+
+  /** 'HH:mm' 或分钟数 → 分钟数（不合法返回 null） */
+  private parseClockToMin(raw: unknown): number | null {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const hm = /^(\d{1,2}):(\d{2})$/.exec(s);
+    if (hm) {
+      const h = Number(hm[1]);
+      const mi = Number(hm[2]);
+      if (h > 24 || mi > 59) return null;
+      return Math.min(1440, h * 60 + mi);
+    }
+    const n = Number(s);
+    if (Number.isFinite(n) && n >= 0 && n <= 1440) return Math.round(n);
+    return null;
+  }
+
+  private mergeMinutes(list: { startMin: number; endMin: number }[]) {
+    const rs = list
+      .map((r) => ({ startMin: Math.max(0, Math.trunc(r.startMin)), endMin: Math.min(1440, Math.trunc(r.endMin)) }))
+      .filter((r) => r.endMin > r.startMin)
+      .sort((a, b) => a.startMin - b.startMin);
+    const out: { startMin: number; endMin: number }[] = [];
+    for (const r of rs) {
+      const last = out[out.length - 1];
+      if (last && r.startMin <= last.endMin) last.endMin = Math.max(last.endMin, r.endMin);
+      else out.push({ ...r });
+    }
+    return out;
+  }
+
+  private subtractMinutes(base: { startMin: number; endMin: number }[], blocks: { startMin: number; endMin: number }[]) {
+    let cur = this.mergeMinutes(base);
+    for (const b of this.mergeMinutes(blocks)) {
+      const next: { startMin: number; endMin: number }[] = [];
+      for (const r of cur) {
+        if (b.endMin <= r.startMin || b.startMin >= r.endMin) {
+          next.push(r);
+          continue;
+        }
+        if (b.startMin > r.startMin) next.push({ startMin: r.startMin, endMin: b.startMin });
+        if (b.endMin < r.endMin) next.push({ startMin: b.endMin, endMin: r.endMin });
+      }
+      cur = next;
+    }
+    return cur;
+  }
+
+  /** 老师某几天的空档：工作时段模板 + 临时可约/不可约 + 会议 + 预约（待确认也占位，避免撞车） */
+  private async computeAvailability(ownerId: string, fromDay: Date, toDay: Date) {
+    const rangeEnd = this.addDays(toDay, 1);
+    const [weekly, oneoffs, meetings, bookings] = await Promise.all([
+      this.prisma.userWorkSlot.findMany({ where: { userId: ownerId }, select: { weekday: true, startMin: true, endMin: true } }),
+      this.prisma.userTimeSlot.findMany({
+        where: { userId: ownerId, date: { gte: fromDay, lt: rangeEnd } },
+        select: { date: true, startMin: true, endMin: true, kind: true, note: true },
+      }),
+      this.prisma.meeting.findMany({
+        where: {
+          deletedAt: null,
+          status: { not: 'CANCELLED' },
+          startAt: { lt: rangeEnd },
+          endAt: { gt: fromDay },
+          OR: [{ ownerId }, { participantIds: { has: ownerId } }],
+        },
+        select: { id: true, title: true, startAt: true, endAt: true, status: true },
+      }),
+      this.prisma.meetingBooking.findMany({
+        where: { ownerId, status: { in: ['PENDING', 'CONFIRMED'] }, startAt: { lt: rangeEnd }, endAt: { gt: fromDay } },
+        select: { id: true, title: true, startAt: true, endAt: true, status: true, requester: { select: { name: true } } },
+      }),
+    ]);
+
+    const days: {
+      date: string;
+      weekday: string;
+      free: string[];
+      freeRanges: { startMin: number; endMin: number }[];
+      busy: { time: string; label: string }[];
+      note?: string;
+    }[] = [];
+
+    for (let cur = fromDay; cur.getTime() <= toDay.getTime(); cur = this.addDays(cur, 1)) {
+      const dayStart = cur.getTime();
+      const dayEnd = this.addDays(cur, 1).getTime();
+      const dow = this.bjWeekdayOf(cur);
+      const dayOffs = oneoffs.filter((o) => o.date.getTime() === dayStart);
+      const base = [
+        ...weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
+        ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
+      ];
+      // 老师还没登记排班时按工作日 9:00-18:00 给参考空档（预约仍需老师确认），避免功能对未登记的人完全不可用
+      const fallbackBase = !base.length && dow <= 4;
+      const baseRanges = fallbackBase ? [{ startMin: 9 * 60, endMin: 18 * 60 }] : base;
+      const blocks: { startMin: number; endMin: number }[] = dayOffs
+        .filter((o) => o.kind === 'BUSY')
+        .map((o) => ({ startMin: o.startMin, endMin: o.endMin }));
+      const busy: { time: string; label: string }[] = [];
+      const clampRange = (s: Date, e: Date) => {
+        const sMin = Math.max(0, Math.round((Math.max(s.getTime(), dayStart) - dayStart) / 60000));
+        const eMin = Math.min(1440, Math.round((Math.min(e.getTime(), dayEnd) - dayStart) / 60000));
+        return { startMin: sMin, endMin: eMin };
+      };
+      for (const m of meetings) {
+        if (m.endAt.getTime() <= dayStart || m.startAt.getTime() >= dayEnd) continue;
+        const r = clampRange(m.startAt, m.endAt);
+        blocks.push(r);
+        busy.push({ time: slotRangeLabel(r.startMin, r.endMin), label: `会议《${m.title}》` });
+      }
+      for (const b of bookings) {
+        if (b.endAt.getTime() <= dayStart || b.startAt.getTime() >= dayEnd) continue;
+        const r = clampRange(b.startAt, b.endAt);
+        blocks.push(r);
+        busy.push({
+          time: slotRangeLabel(r.startMin, r.endMin),
+          label: `${b.status === 'CONFIRMED' ? '已确认预约' : '待确认预约'}·${b.requester?.name ?? '成员'}`,
+        });
+      }
+      for (const o of dayOffs.filter((x) => x.kind === 'BUSY')) {
+        busy.push({ time: slotRangeLabel(o.startMin, o.endMin), label: o.note ? `不可约：${o.note}` : '不可约' });
+      }
+      const freeRanges = baseRanges.length ? this.subtractMinutes(baseRanges, blocks) : [];
+      const row: (typeof days)[number] = {
+        date: fmtBeijingDate(cur),
+        weekday: weekdayLabel(dow),
+        free: freeRanges.map((r) => slotRangeLabel(r.startMin, r.endMin)),
+        freeRanges,
+        busy: busy.sort((a, b) => a.time.localeCompare(b.time)),
+      };
+      if (fallbackBase) row.note = '老师还没登记常规可约时间，这里按工作日 09:00-18:00 给参考，需老师确认后才生效';
+      else if (!base.length) row.note = '未登记可约时间（非工作日）';
+      else if (!freeRanges.length) row.note = '当天已排满';
+      days.push(row);
+    }
+    return { days };
+  }
+
+  /** 解析查询区间：默认今天起 7 天；最早今天、最长 21 天 */
+  private parseScheduleRange(args: any) {
+    const today = this.bjDayStart();
+    let from = this.parseBjDay(args?.dateFrom) ?? today;
+    let to = this.parseBjDay(args?.dateTo) ?? this.addDays(from, 6);
+    if (to.getTime() < from.getTime()) [from, to] = [to, from];
+    if (from.getTime() < today.getTime()) from = today;
+    const cap = this.addDays(from, 20);
+    if (to.getTime() > cap.getTime()) to = cap;
+    return { from, to };
+  }
+
+  /** 约时间机器人上下文：被约人是谁 + 当前说话的人是否本人（决定能做什么） */
+  private async buildScheduleBotContext(me: CurrentUserPayload, bot: AgentBotDef): Promise<string> {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) {
+      return `【约时间机器人】被约人「${bot.ownerName ?? ''}」账号未找到或已停用：你无法查空档、也收不了预约，请如实告知用户联系管理员绑定账号，绝不编造时间。`;
+    }
+    const isOwner = owner.id === me.id;
+    if (!isOwner) {
+      return [
+        `【约时间机器人】被约人=${owner.name}（用户口里的「${bot.ownerName}」就是这位）；当前说话的人=${me.name}（访客/同事）。`,
+        `访客视角可用：owner_availability 查空档、owner_bookings 查自己发过的预约、BOOKING_CREATE 发起预约（会出确认卡，老师收到钉钉私聊后确认）。不能替老师登记时间、不能审批。`,
+      ].join('\n');
+    }
+    // 本人视角：把「谁约了我 + 近期空档」快照直接注入上下文，老师一开口助手就主动汇报，不用先查一轮
+    const now = new Date();
+    const pending = await this.prisma.meetingBooking.findMany({
+      where: { ownerId: owner.id, status: 'PENDING', endAt: { gt: now } },
+      orderBy: { startAt: 'asc' },
+      take: 10,
+      select: { id: true, title: true, note: true, startAt: true, endAt: true, requester: { select: { name: true } } },
+    });
+    const avail = await this.computeAvailability(owner.id, now, this.addDays(now, 7));
+    const freeDays = avail.days
+      .filter((d) => d.free.length)
+      .map((d) => `${d.date}（${d.weekday}）${d.free.join('、')}${d.note ? `［${d.note}］` : ''}`);
+    return [
+      `【约时间机器人】被约人=${owner.name}（用户口里的「${bot.ownerName}」就是这位）；当前说话的人=${me.name}（就是被约人本人）。`,
+      `【待确认预约】${pending.length ? pending.map((b) => `${b.requester?.name ?? ''} 约 ${fmtBeijing(b.startAt).slice(5, 16)}-${fmtBeijing(b.endAt).slice(11, 16)}（${b.title || '未填事由'}，bookingId=${b.id}）`).join('；') : '暂无'}。第一句话就要向老师汇报这些待确认预约（有冲突的给出你的建议），老师答复后用 BOOKING_DECIDE 批准/驳回（note 会转告对方），或用 TIME_SLOT_SET 登记时间。`,
+      `【未来 7天空档概览】${freeDays.length ? freeDays.join('；') : '暂无登记空档'}。`,
+      `本人视角可用：owner_agenda 看自己近期安排与待审批预约；TIME_SLOT_SET 登记「临时可约 / 临时不可约」时段；BOOKING_DECIDE 审批别人发来的预约。你是老师的分身助理：时间冲突时可直接代表老师答复成员（驳回并附原因与建议改期空档，系统会钉钉私聊通知对方）。`,
+    ].join('\n');
+  }
+
+  private async toolOwnerAvailability(bot: AgentBotDef | undefined, args: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    const { from, to } = this.parseScheduleRange(args);
+    const data = await this.computeAvailability(owner.id, from, to);
+    return {
+      owner: owner.name,
+      from: fmtBeijingDate(from),
+      to: fmtBeijingDate(to),
+      days: data.days.map((d) => ({ date: d.date, weekday: d.weekday, free: d.free, busy: d.busy, note: d.note })),
+      hint: 'free 为可约空档；「未登记可约时间」的天说明老师还没排工作时段，可建议老师本人补登记',
+    };
+  }
+
+  private async toolOwnerAgenda(me: CurrentUserPayload, bot: AgentBotDef | undefined, args: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    const { from, to } = this.parseScheduleRange(args);
+    const rangeEnd = this.addDays(to, 1);
+    const isOwner = owner.id === me.id;
+    const data = await this.computeAvailability(owner.id, from, to);
+    const bookings = await this.prisma.meetingBooking.findMany({
+      where: {
+        ...(isOwner ? { ownerId: owner.id } : { ownerId: owner.id, requesterId: me.id }),
+        startAt: { lt: rangeEnd },
+        endAt: { gt: from },
+      },
+      orderBy: { startAt: 'asc' },
+      take: 40,
+      select: { id: true, title: true, note: true, startAt: true, endAt: true, status: true, requester: { select: { name: true } } },
+    });
+    return {
+      owner: owner.name,
+      perspective: isOwner ? '被约人本人' : '访客',
+      from: fmtBeijingDate(from),
+      to: fmtBeijingDate(to),
+      days: data.days.map((d) => ({ date: d.date, weekday: d.weekday, free: d.free, busy: d.busy, note: d.note })),
+      bookings: bookings.map((b) => ({
+        id: b.id,
+        who: b.requester?.name ?? '',
+        start: fmtBeijing(b.startAt).slice(0, 16),
+        end: fmtBeijing(b.endAt).slice(11, 16),
+        status: b.status,
+        title: b.title,
+        note: b.note,
+      })),
+      hint: isOwner
+        ? 'PENDING 的预约可用 BOOKING_DECIDE 批准/驳回；临时空档用 TIME_SLOT_SET 登记'
+        : '这里只显示你自己向该老师发起的预约，别人的预约你看不到',
+    };
+  }
+
+  private async toolOwnerBookings(me: CurrentUserPayload, bot: AgentBotDef | undefined, args: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    const isOwner = owner.id === me.id;
+    const status = String(args?.status ?? '').toUpperCase();
+    const statusFilter = ['PENDING', 'CONFIRMED', 'REJECTED', 'CANCELLED'].includes(status) ? [status] : isOwner ? ['PENDING', 'CONFIRMED'] : undefined;
+    const rows = await this.prisma.meetingBooking.findMany({
+      where: {
+        ...(isOwner ? { ownerId: owner.id } : { ownerId: owner.id, requesterId: me.id }),
+        ...(statusFilter ? { status: { in: statusFilter } } : {}),
+      },
+      orderBy: { startAt: 'desc' },
+      take: 30,
+      select: { id: true, title: true, note: true, startAt: true, endAt: true, status: true, decideNote: true, requester: { select: { name: true } } },
+    });
+    return {
+      owner: owner.name,
+      perspective: isOwner ? '被约人本人（看谁约了我）' : '发起人（只能看自己的预约）',
+      bookings: rows.map((b) => ({
+        id: b.id,
+        who: b.requester?.name ?? '',
+        start: fmtBeijing(b.startAt).slice(0, 16),
+        end: fmtBeijing(b.endAt).slice(11, 16),
+        status: b.status,
+        title: b.title,
+        note: b.note,
+        decideNote: b.decideNote,
+      })),
+    };
+  }
+
+  /** 该老师某时段是否已有会议/预约（冲突检测） */
+  private async findOwnerConflict(ownerId: string, sv: Date, ev: Date): Promise<string | null> {
+    const m = await this.prisma.meeting.findFirst({
+      where: {
+        deletedAt: null,
+        status: { not: 'CANCELLED' },
+        startAt: { lt: ev },
+        endAt: { gt: sv },
+        OR: [{ ownerId }, { participantIds: { has: ownerId } }],
+      },
+      orderBy: { startAt: 'asc' },
+      select: { title: true, startAt: true, endAt: true },
+    });
+    if (m) return `会议《${m.title}》${fmtBeijing(m.startAt).slice(11, 16)}-${fmtBeijing(m.endAt).slice(11, 16)}`;
+    const b = await this.prisma.meetingBooking.findFirst({
+      where: { ownerId, status: { in: ['PENDING', 'CONFIRMED'] }, startAt: { lt: ev }, endAt: { gt: sv } },
+      orderBy: { startAt: 'asc' },
+      select: { status: true, startAt: true, endAt: true, requester: { select: { name: true } } },
+    });
+    if (b) {
+      return `${b.status === 'CONFIRMED' ? '已确认' : '待确认'}预约（${b.requester?.name ?? '成员'}）${fmtBeijing(b.startAt).slice(11, 16)}-${fmtBeijing(
+        b.endAt,
+      ).slice(11, 16)}`;
+    }
+    return null;
+  }
+
+  /** 该时段是否完全落在老师登记的可约空档内（用于确认卡提示，不硬拦） */
+  private async insideOwnerFree(ownerId: string, sv: Date, ev: Date): Promise<boolean> {
+    const day = this.bjDayStart(sv);
+    if (this.bjDayStart(ev).getTime() !== day.getTime()) return false;
+    const data = await this.computeAvailability(ownerId, day, day);
+    const row = data.days[0];
+    if (!row) return false;
+    const s = this.bjMinuteOfDay(sv);
+    const e = this.bjMinuteOfDay(ev);
+    return row.freeRanges.some((r) => r.startMin <= s && r.endMin >= e);
+  }
+
   // ---- 动作计划（只生成不执行；前端确认后调现有接口） ----
 
   private async buildAction(me: CurrentUserPayload, scope: any, action: any, tier = 'manager', bot?: AgentBotDef): Promise<any | null> {
@@ -1461,6 +1852,12 @@ export class AgentService {
           return await this.planDailyChase(me, scope, action);
         case 'RISK_ALERT':
           return await this.planRiskAlert(me, scope, action);
+        case 'BOOKING_CREATE':
+          return await this.planBookingCreate(me, bot, action);
+        case 'TIME_SLOT_SET':
+          return await this.planTimeSlotSet(me, bot, action);
+        case 'BOOKING_DECIDE':
+          return await this.planBookingDecide(me, bot, action);
       }
     } catch (e: any) {
       this.logger.warn(`Agent 动作计划失败 kind=${kind}: ${e?.message ?? e}`);
@@ -2937,6 +3334,261 @@ export class AgentService {
   private static readonly MAX_SESSION_MSGS = 200;
   /** 每人最多保留的会话数（超出自动裁剪最旧） */
   private static readonly MAX_SESSIONS_PER_USER = 50;
+
+  // ---- 约时间动作计划 ----
+
+  private async planBookingCreate(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { kind: 'BOOKING_CREATE', needClarify: 'owner', reason: `被约人「${bot?.ownerName ?? ''}」账号还没绑定或已停用，暂时不能预约，请联系管理员` };
+    if (owner.id === me.id) {
+      return { kind: 'BOOKING_CREATE', needClarify: 'self', reason: '你是被约老师本人，不能预约自己；想看安排直接说「这周我的安排」' };
+    }
+    const a = action ?? {};
+    const startAt = String(a.startAt ?? '').trim();
+    const endAt = String(a.endAt ?? '').trim();
+    const sv = new Date(startAt);
+    const ev = new Date(endAt);
+    if (!startAt || !endAt || Number.isNaN(sv.getTime()) || Number.isNaN(ev.getTime()) || ev.getTime() <= sv.getTime()) {
+      return { kind: 'BOOKING_CREATE', needClarify: 'startAt/endAt', reason: '预约时间缺失或结束不晚于开始，请确认具体日期与时段（如「11月18日 15:00~15:30」）' };
+    }
+    const durationMin = Math.round((ev.getTime() - sv.getTime()) / 60000);
+    if (durationMin < 10) return { kind: 'BOOKING_CREATE', needClarify: 'duration', reason: '预约时长太短（至少 10 分钟），请与用户确认' };
+    if (durationMin > 240) return { kind: 'BOOKING_CREATE', needClarify: 'duration', reason: '单次预约超过 4 小时，请与用户确认是否拆成多段' };
+    if (sv.getTime() < Date.now() - 5 * 60000) return { kind: 'BOOKING_CREATE', needClarify: 'startAt', reason: '这个时间已经过去了，请换一个将来的时间' };
+    const conflict = await this.findOwnerConflict(owner.id, sv, ev);
+    if (conflict) {
+      return { kind: 'BOOKING_CREATE', needClarify: 'time', reason: `${owner.name}该时段已被占用：${conflict}，请换一个空档（可用 owner_availability 重新查）` };
+    }
+    const insideFree = await this.insideOwnerFree(owner.id, sv, ev);
+    return {
+      kind: 'BOOKING_CREATE',
+      label: '发起沟通预约',
+      ownerId: owner.id,
+      ownerName: owner.name,
+      requesterName: me.name,
+      title: (String(a.title ?? '').trim() || `${me.name} 想约 ${owner.name} 沟通`).slice(0, 80),
+      note: String(a.note ?? '').trim().slice(0, 500) || null,
+      startAt: sv.toISOString(),
+      endAt: ev.toISOString(),
+      startLabel: fmtBeijing(sv).slice(0, 16),
+      endLabel: fmtBeijing(ev).slice(11, 16),
+      durationMin,
+      insideFree,
+      hint: insideFree ? '这落在老师登记的可约时段内' : '注意：这不在老师登记的可约时段内，老师可能驳回',
+    };
+  }
+
+  private async planTimeSlotSet(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { kind: 'TIME_SLOT_SET', needClarify: 'owner', reason: `被约人「${bot?.ownerName ?? ''}」账号还没绑定，无法登记` };
+    if (owner.id !== me.id) {
+      return { kind: 'TIME_SLOT_SET', needClarify: 'owner', reason: `只有${owner.name}本人可以登记自己的可约时间；想看空档可以用 owner_availability` };
+    }
+    const a = action ?? {};
+    const day = this.parseBjDay(String(a.date ?? '').slice(0, 10));
+    if (!day) return { kind: 'TIME_SLOT_SET', needClarify: 'date', reason: '日期不明确，请确认是哪一天（如「11月18日」）' };
+    const startMin = this.parseClockToMin(a.start ?? a.startTime ?? a.startMin);
+    const endMin = this.parseClockToMin(a.end ?? a.endTime ?? a.endMin);
+    if (startMin === null || endMin === null || endMin <= startMin) {
+      return { kind: 'TIME_SLOT_SET', needClarify: 'time', reason: '时段不明确，请确认开始/结束时间（如「14:00-16:00」）' };
+    }
+    const kindCode = String(a.kind ?? 'FREE').toUpperCase() === 'BUSY' ? 'BUSY' : 'FREE';
+    return {
+      kind: 'TIME_SLOT_SET',
+      label: kindCode === 'BUSY' ? '登记临时不可约时段' : '登记临时可约时段',
+      date: fmtBeijingDate(day),
+      weekday: weekdayLabel(this.bjWeekdayOf(day)),
+      startMin,
+      endMin,
+      range: slotRangeLabel(startMin, endMin),
+      kindCode,
+      note: String(a.note ?? '').trim().slice(0, 100) || null,
+    };
+  }
+
+  private async planBookingDecide(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { kind: 'BOOKING_DECIDE', needClarify: 'owner', reason: `被约人「${bot?.ownerName ?? ''}」账号还没绑定，无法审批` };
+    if (owner.id !== me.id) {
+      return { kind: 'BOOKING_DECIDE', needClarify: 'owner', reason: `只有${owner.name}本人可以审批预约；你可以用 owner_bookings 查看自己预约的进度` };
+    }
+    const a = action ?? {};
+    const sel = {
+      id: true,
+      title: true,
+      note: true,
+      startAt: true,
+      endAt: true,
+      status: true,
+      requester: { select: { name: true } },
+    } as const;
+    let b: any = null;
+    const id = String(a.bookingId ?? '').trim();
+    if (id) {
+      b = await this.prisma.meetingBooking.findFirst({ where: { id, ownerId: owner.id }, select: sel });
+    } else {
+      const rows = await this.prisma.meetingBooking.findMany({ where: { ownerId: owner.id, status: 'PENDING' }, orderBy: { startAt: 'asc' }, take: 30, select: sel });
+      const who = normName(a.requesterName ?? '');
+      if (rows.length === 1) b = rows[0];
+      else if (who) b = rows.find((r) => normName(r.requester?.name).includes(who) || who.includes(normName(r.requester?.name))) ?? null;
+    }
+    if (!b) return { kind: 'BOOKING_DECIDE', needClarify: 'bookingId', reason: '没找到对应的待审批预约，请先用 owner_bookings 查一下（status=PENDING）是哪一条' };
+    if (b.status !== 'PENDING') return { kind: 'BOOKING_DECIDE', needClarify: 'status', reason: `这条预约当前状态是 ${b.status}，不需要再审批` };
+    const approve = a.approve !== false;
+    return {
+      kind: 'BOOKING_DECIDE',
+      label: approve ? '批准预约' : '驳回预约',
+      bookingId: b.id,
+      requesterName: b.requester?.name ?? '',
+      title: b.title,
+      note: b.note,
+      startLabel: fmtBeijing(b.startAt).slice(0, 16),
+      endLabel: fmtBeijing(b.endAt).slice(11, 16),
+      approve,
+      decideNote: String(a.note ?? '').trim().slice(0, 200) || null,
+    };
+  }
+
+  // ---- 预约读写接口（前端确认卡片执行时调用） ----
+
+  /** 我相关的预约：作为被约人（谁约了我）+ 作为发起人（我约了谁） */
+  async listBookings(me: CurrentUserPayload) {
+    await this.assertVisible(me);
+    const sel = { id: true, title: true, note: true, startAt: true, endAt: true, status: true, decideNote: true, createdAt: true } as const;
+    const [asOwner, asRequester] = await Promise.all([
+      this.prisma.meetingBooking.findMany({
+        where: { ownerId: me.id },
+        orderBy: { startAt: 'desc' },
+        take: 50,
+        select: { ...sel, requester: { select: { name: true } } },
+      }),
+      this.prisma.meetingBooking.findMany({
+        where: { requesterId: me.id },
+        orderBy: { startAt: 'desc' },
+        take: 50,
+        select: { ...sel, owner: { select: { name: true } } },
+      }),
+    ]);
+    const view = (b: any) => ({
+      id: b.id,
+      title: b.title,
+      note: b.note,
+      status: b.status,
+      decideNote: b.decideNote,
+      start: fmtBeijing(b.startAt).slice(0, 16),
+      end: fmtBeijing(b.endAt).slice(11, 16),
+      startAt: b.startAt,
+      endAt: b.endAt,
+      who: b.requester?.name ?? b.owner?.name ?? '',
+    });
+    return { asOwner: asOwner.map(view), asRequester: asRequester.map(view) };
+  }
+
+  /** 发起预约（成员）：先查冲突再建单，钉钉私聊通知老师；老师确认后才算数 */
+  async createBooking(me: CurrentUserPayload, body: { ownerId?: string; startAt?: string; endAt?: string; title?: string; note?: string }) {
+    await this.assertVisible(me);
+    const ownerId = String(body?.ownerId ?? '').trim();
+    const owner = await this.prisma.user.findFirst({ where: { id: ownerId, active: true }, select: { id: true, name: true, phone: true } });
+    if (!owner) throw new BadRequestException('被约人不存在或已停用');
+    if (owner.id === me.id) throw new BadRequestException('不能预约自己');
+    const sv = new Date(String(body?.startAt ?? ''));
+    const ev = new Date(String(body?.endAt ?? ''));
+    if (Number.isNaN(sv.getTime()) || Number.isNaN(ev.getTime()) || ev.getTime() <= sv.getTime()) throw new BadRequestException('预约时间不合法');
+    if (sv.getTime() < Date.now() - 5 * 60000) throw new BadRequestException('预约时间已过去，请选择将来的时间');
+    const conflict = await this.findOwnerConflict(owner.id, sv, ev);
+    if (conflict) throw new BadRequestException(`${owner.name}该时段已被占用：${conflict}`);
+    const title = String(body?.title ?? '').trim().slice(0, 80) || `${me.name} 与 ${owner.name} 沟通`;
+    const note = String(body?.note ?? '').trim().slice(0, 500) || null;
+    const row = await this.prisma.meetingBooking.create({ data: { ownerId: owner.id, requesterId: me.id, title, note, startAt: sv, endAt: ev } });
+    // 站内信 + 钉钉私聊（通知失败不阻断业务）
+    try {
+      await this.notifications.create(owner.id, {
+        type: NotificationType.BOOKING,
+        title: `新的沟通预约：${me.name}`,
+        content: `${fmtBeijing(sv).slice(0, 16)}-${fmtBeijing(ev).slice(11, 16)} 想约你沟通：${title}${note ? `（${note}）` : ''}`,
+        link: '/',
+      });
+    } catch (e: any) {
+      this.logger.warn(`预约站内信写入失败：${e?.message ?? e}`);
+    }
+    try {
+      const target = await this.dm.resolveTarget(owner);
+      await this.dm.sendDm(
+        target.to,
+        `【预约待确认】${me.name} 想约你 ${fmtBeijing(sv).slice(0, 16)}-${fmtBeijing(ev).slice(11, 16)}\n事由：${title}${
+          note ? `\n补充：${note}` : ''
+        }\n\n打开 AI 悬浮窗里「约${owner.name}」的机器人，回复「同意」或「驳回」即可处理。\n${webLink('/')}`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`预约钉钉提醒发送失败（${owner.name}）：${e?.message ?? e}`);
+    }
+    return { ok: true, id: row.id };
+  }
+
+  /** 老师审批预约：批准=确认，驳回=说明原因；结果钉钉私聊通知发起人 */
+  async decideBooking(me: CurrentUserPayload, id: string, body: { approve?: boolean; note?: string }) {
+    await this.assertVisible(me);
+    const row = await this.prisma.meetingBooking.findUnique({
+      where: { id: String(id ?? '') },
+      select: {
+        id: true,
+        ownerId: true,
+        requesterId: true,
+        title: true,
+        startAt: true,
+        endAt: true,
+        status: true,
+        owner: { select: { name: true } },
+        requester: { select: { id: true, name: true, phone: true } },
+      },
+    });
+    if (!row) throw new NotFoundException('预约不存在');
+    if (row.ownerId !== me.id) throw new ForbiddenException('只有被约人本人可以审批预约');
+    if (row.status !== 'PENDING') throw new BadRequestException(`该预约当前状态是 ${row.status}，不能重复审批`);
+    const approve = body?.approve !== false;
+    const note = String(body?.note ?? '').trim().slice(0, 200) || null;
+    await this.prisma.meetingBooking.update({
+      where: { id: row.id },
+      data: { status: approve ? 'CONFIRMED' : 'REJECTED', decideNote: note, decidedAt: new Date() },
+    });
+    const timeText = `${fmtBeijing(row.startAt).slice(0, 16)}-${fmtBeijing(row.endAt).slice(11, 16)}`;
+    try {
+      await this.notifications.create(row.requesterId, {
+        type: NotificationType.BOOKING,
+        title: approve ? `预约已确认：${row.owner.name}` : `预约被驳回：${row.owner.name}`,
+        content: `${timeText}（${row.title}）${approve ? '已确认' : `被驳回${note ? `：${note}` : ''}`}`,
+        link: '/',
+      });
+    } catch (e: any) {
+      this.logger.warn(`预约结果站内信写入失败：${e?.message ?? e}`);
+    }
+    try {
+      const target = await this.dm.resolveTarget(row.requester);
+      await this.dm.sendDm(
+        target.to,
+        approve
+          ? `【预约已确认】${row.owner.name} 已确认你 ${timeText} 的沟通预约（${row.title}）。`
+          : `【预约被驳回】${row.owner.name} 没有接受你 ${timeText} 的沟通预约（${row.title}）${note ? `\n原因：${note}` : ''}。可以换个时间再约。\n${webLink('/')}`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`预约结果钉钉提醒发送失败：${e?.message ?? e}`);
+    }
+    return { ok: true, status: approve ? 'CONFIRMED' : 'REJECTED' };
+  }
+
+  /** 老师登记一次性时段（临时可约 / 临时不可约）：只能写自己的 */
+  async setTimeSlot(me: CurrentUserPayload, body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; note?: string }) {
+    await this.assertVisible(me);
+    const day = this.parseBjDay(String(body?.date ?? '').slice(0, 10));
+    if (!day) throw new BadRequestException('日期不合法（YYYY-MM-DD）');
+    const startMin = this.parseClockToMin(body?.startMin);
+    const endMin = this.parseClockToMin(body?.endMin);
+    if (startMin === null || endMin === null || endMin <= startMin) throw new BadRequestException('时段不合法（startMin/endMin）');
+    const kind = String(body?.kind ?? 'FREE').toUpperCase() === 'BUSY' ? 'BUSY' : 'FREE';
+    const note = String(body?.note ?? '').trim().slice(0, 100) || null;
+    const row = await this.prisma.userTimeSlot.create({ data: { userId: me.id, date: day, startMin, endMin, kind, note } });
+    return { ok: true, id: row.id, date: fmtBeijingDate(day), range: slotRangeLabel(startMin, endMin), kind };
+  }
 
   /** 会话列表（不含正文，轻量）：按最近更新排序；带 bot 时只回该机器人的会话（分档案） */
   async listSessions(me: CurrentUserPayload, bot?: string) {
