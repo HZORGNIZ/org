@@ -1345,6 +1345,8 @@ model AgentSession {
   title        String   @default("新会话")
   messages     Json     @default("[]")
   messageCount Int      @default(0)
+  // 所属机器人（general=万能管家；project/daily/meeting/chase/notice 为专属机器人），会话按机器人分档案
+  botType      String   @default("general")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { CurrentUser, CurrentUserPayload } from '../../common/current-user.decorator';
 import { Roles } from '../../common/roles.decorator';
@@ -41,7 +41,7 @@ export class AgentController {
   @Post('chat')
   chat(
     @CurrentUser() me: CurrentUserPayload,
-    @Body() body: { messages?: { role?: string; content?: string }[]; pageContext?: { projectId?: string; projectName?: string; route?: string } },
+    @Body() body: { messages?: { role?: string; content?: string }[]; pageContext?: { projectId?: string; projectName?: string; route?: string }; bot?: string },
   ) {
     return this.agent.chat(me, body ?? {});
   }
@@ -103,10 +103,10 @@ export class AgentController {
     return this.agent.overview(me);
   }
 
-  /** 会话历史：列表（轻量）/读取/保存(upsert)/删除（均按本人收敛，需管理者 Agent 可见） */
+  /** 会话历史：列表（轻量，?bot= 按机器人分档案）/读取/保存(upsert, bot=归属机器人)/删除（均按本人收敛，需管理者 Agent 可见） */
   @Get('sessions')
-  listSessions(@CurrentUser() me: CurrentUserPayload) {
-    return this.agent.listSessions(me);
+  listSessions(@CurrentUser() me: CurrentUserPayload, @Query('bot') bot?: string) {
+    return this.agent.listSessions(me, bot);
   }
 
   @Get('sessions/:id')
@@ -115,7 +115,7 @@ export class AgentController {
   }
 
   @Post('sessions')
-  saveSession(@CurrentUser() me: CurrentUserPayload, @Body() body: { id?: string; title?: string; messages?: any[] }) {
+  saveSession(@CurrentUser() me: CurrentUserPayload, @Body() body: { id?: string; title?: string; messages?: any[]; bot?: string }) {
     return this.agent.saveSession(me, body ?? {});
   }
 

@@ -69,6 +69,142 @@ const ACTION_KINDS = new Set([
   'RISK_ALERT',
 ]);
 
+// ---- 专属机器人注册表 ----
+// 每个机器人 = 人设提示词（PROMPTS.md 独立块）+ 只读工具白名单 + 动作白名单；
+// tools/actions 为 null 表示不额外收敛（沿用档位 tier 的既有白名单）。催办/通知类对外发言的机器人仅管理者档可见。
+
+export interface AgentBotDef {
+  key: string;
+  name: string;
+  /** 头像占位字（1 个汉字，前端圆形头像里显示） */
+  short: string;
+  /** 一句话简介（头像下方/开场白里展示） */
+  desc: string;
+  /** 切到该机器人时的开场白（前端空会话时展示，不走大模型） */
+  greeting: string;
+  /** 输入框占位文案 */
+  placeholder: string;
+  /** 仅管理者档可见（员工档不出现该机器人） */
+  managersOnly?: boolean;
+  /** PROMPTS.md 里的提示词块名 */
+  prompt: string;
+  tools: Set<string> | null;
+  actions: Set<string> | null;
+}
+
+const READ_ONLY_SET = new Set<string>();
+
+export const AGENT_BOTS: AgentBotDef[] = [
+  {
+    key: 'general',
+    name: '万能管家',
+    short: '万能',
+    desc: '什么都能问的兜底大管家：查进度/风险/待办、写日报周报、发起会议、发通知都能做',
+    greeting: '我是万能管家，查进度、写日报、发通知都可以找我；想聊得更专，可以切上面的专属机器人。',
+    placeholder: '问问万能管家…',
+    prompt: 'manager.agent',
+    tools: null,
+    actions: null,
+  },
+  {
+    key: 'project',
+    name: '项目管家',
+    short: '问',
+    desc: '专答项目咨询：进度、风险、任务、周报、成员日报、项目文档知识库——只查不改',
+    greeting: '我是项目管家，只负责查与答：项目进度、风险、任务、周报、文档资料都能问；下发任务/改状态请找万能管家。',
+    placeholder: '问问项目进度/风险/资料…',
+    prompt: 'manager.bot.project',
+    tools: new Set([
+      'list_projects',
+      'project_progress',
+      'project_risks',
+      'project_tasks',
+      'project_weekly',
+      'weekly_status',
+      'daily_status',
+      'overdue_tasks',
+      'list_meetings',
+      'team_ranking',
+      'my_ranking',
+      'project_files',
+      'read_project_doc',
+      'project_reports',
+      'search_knowledge',
+      'search_sop',
+      'my_tasks',
+      'my_today',
+      'my_work_schedule',
+    ]),
+    actions: READ_ONLY_SET,
+  },
+  {
+    key: 'daily',
+    name: '日报助手',
+    short: '报',
+    desc: '专帮写日报周报：读今日素材按三段式整理、口述提交、顺手管自己的工作时间安排',
+    greeting: '我是日报助手，专帮写日报/周报：把今天做的事口述给我，我核实后按三段式整理好给你确认提交。',
+    placeholder: '说说今天做了什么，帮你写日报…',
+    prompt: 'manager.bot.daily',
+    tools: new Set(['my_today', 'my_tasks', 'my_work_schedule', 'my_ranking']),
+    actions: new Set(['DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET']),
+  },
+  {
+    key: 'meeting',
+    name: '会议纪要',
+    short: '纪',
+    desc: '专整理会议纪要：查会议、读项目资料、把纪要按要点整理成文',
+    greeting: '我是会议纪要助手：把会议内容/录音转写口述给我，我整理成结构化纪要；也能查你参与的会议与项目资料。',
+    placeholder: '把会议内容说给我，帮你整理纪要…',
+    prompt: 'manager.bot.meeting',
+    tools: new Set(['list_meetings', 'project_files', 'read_project_doc', 'project_reports', 'search_knowledge', 'search_sop', 'my_tasks', 'my_today']),
+    actions: new Set(['MEETING_NOTIFY']),
+  },
+  {
+    key: 'chase',
+    name: '催办小秘书',
+    short: '催',
+    desc: '专催办事：催日报、催周报、催逾期任务、提醒风险项目——先查真实名单再催，绝不空口点名',
+    greeting: '我是催办小秘书：催日报、催周报、催逾期任务都行；我会先查真实名单再出催办计划，你确认后才发送。',
+    placeholder: '要催什么？我先查名单再催…',
+    managersOnly: true,
+    prompt: 'manager.bot.chase',
+    tools: new Set(['daily_status', 'weekly_status', 'overdue_tasks', 'project_tasks', 'list_projects', 'group_options', 'team_ranking', 'list_meetings']),
+    actions: new Set(['DAILY_CHASE', 'WEEKLY_CHASE', 'OVERDUE_CHASE', 'RISK_ALERT']),
+  },
+  {
+    key: 'notice',
+    name: '会议通知',
+    short: '知',
+    desc: '专管会议与通知：发起/发布会议、补发会议通知、把通知发到群或个人',
+    greeting: '我是会议通知助手：帮你发起会议、发布邀请、补发通知，或把通知发到钉钉群/个人（发送前都会给你确认）。',
+    placeholder: '要开什么会/发什么通知…',
+    managersOnly: true,
+    prompt: 'manager.bot.notice',
+    tools: new Set(['list_meetings', 'group_options', 'list_projects', 'search_knowledge', 'search_sop']),
+    actions: new Set(['MEETING_CREATE', 'MEETING_PUBLISH', 'MEETING_NOTIFY', 'NOTIFY_BROADCAST']),
+  },
+];
+
+const BOT_KEYS = new Set(AGENT_BOTS.map((b) => b.key));
+
+/** 校验机器人 key：非法/为空一律回落万能管家（旧前端不传 bot 也照常工作） */
+function normBotKey(raw: unknown): string {
+  const k = String(raw ?? '').trim();
+  return BOT_KEYS.has(k) ? k : 'general';
+}
+
+/** 当前档位可见的机器人清单（config 返回给前端渲染头像栏） */
+function botsForTier(tier: string) {
+  return AGENT_BOTS.filter((b) => !b.managersOnly || tier === 'manager').map((b) => ({
+    key: b.key,
+    name: b.name,
+    short: b.short,
+    desc: b.desc,
+    greeting: b.greeting,
+    placeholder: b.placeholder,
+  }));
+}
+
 /** 任务状态中文（确认卡要显示「从什么改成什么」，不能让用户自己翻译枚举值） */
 const STATUS_CN: Record<string, string> = { TODO: '未开始', IN_PROGRESS: '进行中', DONE: '已完成' };
 
@@ -133,7 +269,7 @@ export class AgentService {
     // 引导词分档：管理员/部门负责人=全站视角，项目负责人=本项目视角，其余=员工视角
     const bucket =
       me.role === 'ADMIN' || me.role === 'DEPT_LEADER' ? 'org' : me.role === 'PROJECT_LEADER' ? 'project' : 'member';
-    return { enabled, memberEnabled, manager, tier, bucket, visible: enabled && tier !== 'none' };
+    return { enabled, memberEnabled, manager, tier, bucket, visible: enabled && tier !== 'none', bots: botsForTier(tier) };
   }
 
   async saveEnabled(enabled: boolean) {
@@ -177,10 +313,16 @@ export class AgentService {
     body: {
       messages?: { role?: string; content?: string }[];
       pageContext?: { projectId?: string; projectName?: string; route?: string };
+      bot?: string;
     },
   ) {
     const tier = await this.assertVisible(me);
     if (!this.ai.enabled) return { reply: '大模型尚未配置（AI_API_KEY），暂时无法使用对话助手。', action: null, toolTrace: [], links: [] };
+
+    // 专属机器人：非法 key/未传 → 万能管家；仅管理者档的机器人对员工档降级为万能管家（前端根本不展示入口，这里是兜底）
+    const botKey = normBotKey(body?.bot);
+    let bot = AGENT_BOTS.find((b) => b.key === botKey)!;
+    if (bot.managersOnly && tier !== 'manager') bot = AGENT_BOTS[0];
 
     // 规整历史：只保留 user/assistant 文本，截最近 MAX_HISTORY 条
     const flat = (body.messages ?? [])
@@ -231,6 +373,10 @@ export class AgentService {
           ? `（其中「${COMPANY_GROUP_NAME}」是公司群：用户说“发公司群/公司大群/大群/全员群”就选它；其余群为项目群）`
           : '（当前未解析到公司群，只能发项目群）'
       }；我的未发布/待召开会议=${JSON.stringify(scope.meetings)}`,
+      // 专属机器人：能力边界写进上下文，模型不越界承诺；工具/动作白名单另在 runTool/buildAction 硬拦截
+      bot.key !== 'general'
+        ? `【当前专属机器人】${bot.name}（${bot.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切换「万能管家」，绝不承诺自己做不到的事。`
+        : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -249,7 +395,7 @@ export class AgentService {
         reply?: string;
         action?: any;
       }>(
-        'manager.agent',
+        bot.prompt,
         { contextNote: ctxBlock },
         { extraMessages, temperature: 0.2 },
       );
@@ -261,7 +407,7 @@ export class AgentService {
         const key = this.traceKey({ tool: toolName, args });
         let result = resultCache.get(key);
         if (!result) {
-          const raw = await this.runTool(me, scope, toolName, args, tier);
+          const raw = await this.runTool(me, scope, toolName, args, tier, bot);
           const ro = raw && typeof raw === 'object' && !Array.isArray(raw) ? ({ ...(raw as any) } as any) : { data: raw };
           if (Array.isArray(ro.links)) {
             for (const l of ro.links) {
@@ -280,7 +426,7 @@ export class AgentService {
       }
 
       const reply = String(out.reply ?? '').trim() || '（模型未给出答复，请补充更多信息后重试）';
-      const action = out.action ? await this.buildAction(me, scope, out.action, tier) : null;
+      const action = out.action ? await this.buildAction(me, scope, out.action, tier, bot) : null;
       if (out.action && !action) {
         // 动作参数解析失败：降级为文字提示，让模型下一轮向用户追问
         return { reply: `${reply}\n\n（我尝试生成的操作计划信息不完整或无权限，已暂停，请补充或修正后重试）`, action: null, toolTrace, links };
@@ -461,10 +607,14 @@ export class AgentService {
 
   // ---- 只读工具执行 ----
 
-  private async runTool(me: CurrentUserPayload, scope: any, tool: string, args: any, tier = 'manager'): Promise<unknown> {
+  private async runTool(me: CurrentUserPayload, scope: any, tool: string, args: any, tier = 'manager', bot?: AgentBotDef): Promise<unknown> {
     // 档位白名单硬拦截：前端不给按钮不算防住，模型乱承诺也不能真查到别人的数据
     if (tier === 'member' && !MEMBER_TOOLS.has(tool)) {
       return { error: '这个查询只对项目/部门负责人开放，你当前是普通成员档' };
+    }
+    // 专属机器人工具白名单：只查不动/专管一事的机器人不放行界外工具
+    if (bot?.tools && !bot.tools.has(tool)) {
+      return { error: `「${bot.name}」不提供这个查询（可用：${[...bot.tools].join('、')}）；如需要请切换「万能管家」` };
     }
     try {
       switch (tool) {
@@ -1275,11 +1425,13 @@ export class AgentService {
 
   // ---- 动作计划（只生成不执行；前端确认后调现有接口） ----
 
-  private async buildAction(me: CurrentUserPayload, scope: any, action: any, tier = 'manager'): Promise<any | null> {
+  private async buildAction(me: CurrentUserPayload, scope: any, action: any, tier = 'manager', bot?: AgentBotDef): Promise<any | null> {
     const kind = String(action?.kind ?? '').toUpperCase();
     if (!ACTION_KINDS.has(kind)) return null;
     // 档位硬拦截（与 runTool 同一道理）：员工档只能动自己的任务与日报/周报
     if (tier === 'member' && !MEMBER_ACTIONS.has(kind)) return null;
+    // 专属机器人动作白名单：只查不动的机器人（如项目管家）动作集为空集，一律不出卡片
+    if (bot?.actions && !bot.actions.has(kind)) return null;
     try {
       switch (kind) {
         case 'MEETING_CREATE':
@@ -2786,13 +2938,13 @@ export class AgentService {
   /** 每人最多保留的会话数（超出自动裁剪最旧） */
   private static readonly MAX_SESSIONS_PER_USER = 50;
 
-  /** 会话列表（不含正文，轻量）：按最近更新排序 */
-  async listSessions(me: CurrentUserPayload) {
+  /** 会话列表（不含正文，轻量）：按最近更新排序；带 bot 时只回该机器人的会话（分档案） */
+  async listSessions(me: CurrentUserPayload, bot?: string) {
     await this.assertVisible(me);
     const rows = await this.prisma.agentSession.findMany({
-      where: { userId: me.id },
+      where: { userId: me.id, ...(bot ? { botType: normBotKey(bot) } : {}) },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, messageCount: true, updatedAt: true, createdAt: true },
+      select: { id: true, title: true, botType: true, messageCount: true, updatedAt: true, createdAt: true },
       take: 100,
     });
     return { sessions: rows };
@@ -2803,25 +2955,26 @@ export class AgentService {
     await this.assertVisible(me);
     const row = await this.prisma.agentSession.findFirst({ where: { id, userId: me.id } });
     if (!row) throw new NotFoundException('会话不存在或无权访问');
-    return { id: row.id, title: row.title, messages: row.messages, updatedAt: row.updatedAt };
+    return { id: row.id, title: row.title, botType: row.botType, messages: row.messages, updatedAt: row.updatedAt };
   }
 
-  /** 保存/新建会话（upsert，仅本人）；messages 为前端消息模型数组，服务端裁剪条数并派生 title/count */
-  async saveSession(me: CurrentUserPayload, body: { id?: string; title?: string; messages?: any[] }) {
+  /** 保存/新建会话（upsert，仅本人）；messages 为前端消息模型数组，服务端裁剪条数并派生 title/count；bot 归属哪个机器人 */
+  async saveSession(me: CurrentUserPayload, body: { id?: string; title?: string; messages?: any[]; bot?: string }) {
     await this.assertVisible(me);
     const msgs = Array.isArray(body?.messages) ? body.messages.slice(-AgentService.MAX_SESSION_MSGS) : [];
     const title = (String(body?.title ?? '').trim() || this.deriveTitle(msgs)).slice(0, 60) || '新会话';
+    const botType = normBotKey(body?.bot);
     if (body?.id) {
       const owned = await this.prisma.agentSession.findFirst({ where: { id: body.id, userId: me.id }, select: { id: true } });
       if (!owned) throw new NotFoundException('会话不存在或无权访问');
       const updated = await this.prisma.agentSession.update({
         where: { id: body.id },
-        data: { title, messages: msgs as any, messageCount: msgs.length },
+        data: { title, messages: msgs as any, messageCount: msgs.length, botType },
       });
       return { ok: true, id: updated.id };
     }
     const created = await this.prisma.agentSession.create({
-      data: { userId: me.id, title, messages: msgs as any, messageCount: msgs.length } as any,
+      data: { userId: me.id, title, messages: msgs as any, messageCount: msgs.length, botType } as any,
     });
     await this.trimSessions(me.id);
     return { ok: true, id: created.id };

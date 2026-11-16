@@ -364,13 +364,23 @@ export const reportsApi = {
 
 // ---------- 管理者 Agent 悬浮窗 ----------
 export const agentApi = {
-  /** 悬浮窗可见性：{ enabled 总闸, memberEnabled 员工档, visible 可见, tier manager|member|none }；所有登录用户可查 */
-  getConfig: () => api.get<{ enabled: boolean; memberEnabled?: boolean; visible: boolean; tier?: string }>('/agent/config'),
+  /** 悬浮窗可见性：{ enabled 总闸, memberEnabled 员工档, visible 可见, tier manager|member|none, bots 专属机器人清单 }；所有登录用户可查 */
+  getConfig: () =>
+    api.get<{
+      enabled: boolean;
+      memberEnabled?: boolean;
+      visible: boolean;
+      tier?: string;
+      bots?: { key: string; name: string; short: string; desc: string; greeting: string; placeholder: string }[];
+    }>('/agent/config'),
   /** 开关保存（仅 ADMIN）：总闸 enabled / 员工档 memberEnabled，给了哪项存哪项 */
   saveConfig: (data: { enabled?: boolean; memberEnabled?: boolean }) => api.put<any>('/agent/config', data),
-  /** 无状态对话：历史由前端携带；返回 { reply, action待确认计划?, toolTrace执行痕迹 } */
-  chat: (messages: { role: string; content: string }[], pageContext?: { projectId?: string; projectName?: string; route?: string }) =>
-    api.post<any>('/agent/chat', { messages, pageContext }),
+  /** 无状态对话：历史由前端携带；bot=专属机器人 key（缺省 general 万能管家）；返回 { reply, action待确认计划?, toolTrace执行痕迹 } */
+  chat: (
+    messages: { role: string; content: string }[],
+    pageContext?: { projectId?: string; projectName?: string; route?: string },
+    bot?: string,
+  ) => api.post<any>('/agent/chat', { messages, pageContext, bot }),
   /** 催交周报（确认后执行；后端重扫缺交名单，只提醒仍缺交的人） */
   chaseWeekly: (data: { periodStart?: string; names?: string[] }) => api.post<any>('/agent/chase-weekly', data),
   /** 周报发群（确认后执行；把已存在的本周某归属周报原文再发一次到指定群，不修改记录） */
@@ -400,12 +410,16 @@ export const agentApi = {
       ranking: { hoursRank: number | null; hoursTotal: number; myHours: number; reportRank: number | null; reportTotal: number; myReportCount: number; label: string };
       workSchedule: { totalSlots: number; todayLabel: string; todayRanges: string[] } | null;
     }>('/agent/overview'),
-  /** 会话历史：列表（轻量，不含正文） */
-  listSessions: () => api.get<{ sessions: { id: string; title: string; messageCount: number; updatedAt: string; createdAt: string }[] }>('/agent/sessions'),
+  /** 会话历史：列表（轻量，不含正文；?bot= 按机器人分档案） */
+  listSessions: (bot?: string) =>
+    api.get<{ sessions: { id: string; title: string; botType?: string; messageCount: number; updatedAt: string; createdAt: string }[] }>(
+      `/agent/sessions${bot ? `?bot=${encodeURIComponent(bot)}` : ''}`,
+    ),
   /** 读取单个会话正文 */
-  getSession: (id: string) => api.get<{ id: string; title: string; messages: any[]; updatedAt: string }>(`/agent/sessions/${id}`),
-  /** 保存/新建会话（传 id 则更新，不传则新建；返回服务端会话 id） */
-  saveSession: (data: { id?: string; title?: string; messages: any[] }) => api.post<{ ok: boolean; id: string }>('/agent/sessions', data),
+  getSession: (id: string) => api.get<{ id: string; title: string; botType?: string; messages: any[]; updatedAt: string }>(`/agent/sessions/${id}`),
+  /** 保存/新建会话（传 id 则更新，不传则新建；bot=归属机器人；返回服务端会话 id） */
+  saveSession: (data: { id?: string; title?: string; messages: any[]; bot?: string }) =>
+    api.post<{ ok: boolean; id: string }>('/agent/sessions', data),
   /** 删除自己的会话 */
   deleteSession: (id: string) => api.del<any>(`/agent/sessions/${id}`),
 };

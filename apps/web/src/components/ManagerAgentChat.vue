@@ -25,7 +25,7 @@
   <!-- 对话面板：锚定在球附近（左右按屏幕半区自适应）；内嵌模式全屏铺满 -->
   <div v-if="open" class="agent-panel" :class="{ 'agent-panel-mobile': embedded, 'agent-panel-inline': mode === 'inline' }" :style="floating ? panelStyle : {}">
     <div class="agent-hd">
-      <span class="agent-hd-title">项目助理 · 小助手</span>
+      <span class="agent-hd-title">{{ curBot?.name ?? '项目助理 · 小助手' }}</span>
       <span class="agent-hd-sub" :title="hdSub">{{ hdSub }}</span>
       <div class="agent-hd-ops">
         <button class="agent-mini-btn" title="历史会话" @click="openHistory">历史</button>
@@ -41,6 +41,22 @@
       <button v-if="embedded" class="agent-home-btn" title="回到工作台首页" @click="router.push('/')">⌂ 首页</button>
       <span v-else></span>
       <AssistantModeSwitch :current="mode === 'floating' ? 'robot' : 'agent'" compact @switch="onModeSwitch" />
+    </div>
+
+    <!-- 专属机器人栏：点击切换人设与能力（清单来自 /agent/config，按档位收敛；催办/通知类仅管理者档可见） -->
+    <div class="agent-bots">
+      <button
+        v-for="b in bots"
+        :key="b.key"
+        class="agent-bot"
+        :class="{ active: b.key === botKey }"
+        :title="b.desc"
+        :disabled="sending"
+        @click="switchBot(b.key)"
+      >
+        <span class="agent-bot-avatar">{{ b.short }}</span>
+        <span class="agent-bot-name">{{ b.name }}</span>
+      </button>
     </div>
 
     <!-- 历史会话面板（服务端持久）：列表/切换/删除 -->
@@ -63,8 +79,14 @@
 
     <div v-else ref="listEl" class="agent-list">
       <div v-if="!msgs.length" class="agent-empty">
+        <!-- 专属机器人：空会话先给开场白（人设来自后端注册表）；万能管家保留完整欢迎屏 -->
+        <div v-if="botKey !== 'general'" class="agent-bot-greet">
+          <div class="agent-bubble agent-bubble-agent">{{ curBot?.greeting }}</div>
+          <div class="agent-bot-desc">{{ curBot?.desc }}</div>
+        </div>
         <!-- 首屏欢迎屏：问候 + 今日速览（4 格，来自 /agent/overview）+ 能力云；三入口共用同一组件 -->
         <AgentWelcome
+          v-else
           :name="overview?.name || auth.user?.name || ''"
           :bucket="bucket"
           :overview="overview"
@@ -152,13 +174,11 @@
         :rows="1"
         autosize
         resize="none"
-        :placeholder="
-          bucket === 'member'
-            ? '问我的待办/日报/周报/会议，或让我帮你写日报…'
-            : bucket === 'project'
-              ? '问我项目情况/团队交报，或让我发群提醒大家交日报/催任务…'
-              : '问我全站项目情况，或让我把通知发到公司群/项目群…'
-        "
+        :placeholder="curBot?.placeholder ?? (bucket === 'member'
+          ? '问我的待办/日报/周报/会议，或让我帮你写日报…'
+          : bucket === 'project'
+            ? '问我项目情况/团队交报，或让我发群提醒大家交日报/催任务…'
+            : '问我全站项目情况，或让我把通知发到公司群/项目群…')"
         :disabled="sending"
         @keydown.enter.exact.prevent="send()"
       />
@@ -271,16 +291,76 @@ const QUICK_CHIPS: Record<'org' | 'project' | 'member', string[]> = {
   project: ['我项目进度怎么样？', '我项目下谁还没交日报？', '这周谁还没交周报？', '等会开个会，帮我发一下', '帮我写今天的日报'],
   member: ['我手里还有哪些待办？', '帮我写今天的日报', '我这周周报还没交吗？', '我今天有没有会要参加？'],
 };
-const quickChips = computed(() => QUICK_CHIPS[bucket.value]);
+const quickChips = computed(() => (botKey.value !== 'general' ? BOT_CHIPS[botKey.value] ?? [] : QUICK_CHIPS[bucket.value]));
 
-/** 头部副标题：按引导档三套（窄屏只显一行，超长省略，悬浮看全文） */
+/** 头部副标题：按引导档三套（窄屏只显一行，超长省略，悬浮看全文）；专属机器人时改显机器人简介 */
 const hdSub = computed(() =>
-  bucket.value === 'member'
-    ? '查我的进度与待办 · 写日报周报 · 找知识与 SOP'
-    : bucket.value === 'project'
-      ? '查我项目进度/团队交报 · 发本项目群提醒 · 发起会议 · 写我的日报'
-      : '查全站进度/风险/周报 · 发公司群/项目群通知 · 下发任务',
+  botKey.value !== 'general'
+    ? curBot.value?.desc ?? ''
+    : bucket.value === 'member'
+      ? '查我的进度与待办 · 写日报周报 · 找知识与 SOP'
+      : bucket.value === 'project'
+        ? '查我项目进度/团队交报 · 发本项目群提醒 · 发起会议 · 写我的日报'
+        : '查全站进度/风险/周报 · 发公司群/项目群通知 · 下发任务',
 );
+
+// ---- 专属机器人：清单来自 /agent/config（后端注册表，按档位收敛）；会话按机器人分档案 ----
+interface BotMeta { key: string; name: string; short: string; desc: string; greeting: string; placeholder: string }
+const FALLBACK_BOTS: BotMeta[] = [
+  { key: 'general', name: '万能管家', short: '万能', desc: '什么都能问的兜底大管家', greeting: '我是万能管家，查进度、写日报、发通知都可以找我。', placeholder: '问问万能管家…' },
+];
+const bots = ref<BotMeta[]>(FALLBACK_BOTS);
+const botKey = ref('general');
+const curBot = computed(() => bots.value.find((b) => b.key === botKey.value));
+
+/** 专属机器人各自的常驻快捷问 */
+const BOT_CHIPS: Record<string, string[]> = {
+  project: ['最近全站项目进展？', '最近有什么风险项目？', '这周谁还没交周报？', '项目里有哪些文档资料？'],
+  daily: ['帮我写今天的日报', '我的公司排名怎么样？', '帮我整理这周的周报', '改我的工作时间安排'],
+  meeting: ['我今天有没有会要参加？', '帮我把刚才的会整理成纪要', '项目成员最近在忙什么？'],
+  chase: ['今天谁还没交日报？帮我催一下', '这周谁还没交周报？催一下', '谁有逾期任务？发群催办', '有风险项目要提醒负责人吗？'],
+  notice: ['下午 3 点开个项目周会', '把通知发到公司群', '发布我的会议草稿'],
+};
+
+/** 每个机器人各记各的活动会话指针（万能管家沿用旧 key，老用户的接续不受影响） */
+function botIdKey() {
+  return botKey.value === 'general' ? activeIdKey() : `${activeIdKey()}:${botKey.value}`;
+}
+async function loadBots() {
+  try {
+    const cfg: any = await agentApi.getConfig();
+    if (Array.isArray(cfg?.bots) && cfg.bots.length) bots.value = cfg.bots;
+  } catch {
+    /* 拉取失败用兜底清单，功能不塌 */
+  }
+  const saved = localStorage.getItem(botIdKey());
+  if (saved && bots.value.some((b) => b.key === saved)) botKey.value = saved;
+}
+/** 切换机器人：保存当前会话 → 清屏 → 接续该机器人上次会话（没有就空会话出开场白） */
+async function switchBot(key: string) {
+  if (key === botKey.value || sending.value) return;
+  clearTimeout(saveTimer);
+  if (msgs.value.length) await persistSession();
+  botKey.value = key;
+  localStorage.setItem(botIdKey(), key);
+  msgs.value = [];
+  sessionId.value = null;
+  showHistory.value = false;
+  const sid = localStorage.getItem(botIdKey());
+  if (sid) {
+    try {
+      const s: any = await agentApi.getSession(sid);
+      if (s && (s.botType ?? 'general') === key) {
+        msgs.value = Array.isArray(s.messages) ? (s.messages as AgentMsg[]) : [];
+        sessionId.value = sid;
+        scrollBottom();
+        return;
+      }
+    } catch {
+      /* 会话没了：保持空会话 */
+    }
+  }
+}
 
 /** 空态能力云已迁到 AgentWelcome.vue（按三档重写）；这里只保留输入框上方常驻快捷问与首屏速览数据 */
 // 今日速览一次性取自 /agent/overview（确定性拼数据，不走大模型）；取失败置 null，AgentWelcome 降级为只显示能力云
@@ -433,7 +513,7 @@ function loadMirror(): AgentMsg[] {
 function loadHistory(): Promise<void> {
   // 启动时优先按上次活动会话从服务端载入；失败/无则回落本地镜像
   const mirror = loadMirror();
-  const sid = localStorage.getItem(activeIdKey());
+  const sid = localStorage.getItem(botIdKey());
   if (sid) {
     sessionId.value = sid;
     return agentApi
@@ -477,10 +557,10 @@ function saveHistory() {
 async function persistSession() {
   if (!msgs.value.length) return;
   try {
-    const r: any = await agentApi.saveSession({ id: sessionId.value ?? undefined, messages: msgs.value.slice(-200) });
+    const r: any = await agentApi.saveSession({ id: sessionId.value ?? undefined, messages: msgs.value.slice(-200), bot: botKey.value });
     if (r?.id) {
       sessionId.value = r.id;
-      localStorage.setItem(activeIdKey(), r.id);
+      localStorage.setItem(botIdKey(), r.id);
     }
   } catch {
     /* 服务端不可用时本地镜像仍在，下次自动重试 */
@@ -490,7 +570,7 @@ function clearChat() {
   // 当前会话已即时持久化，直接开启新会话（不删除历史）
   clearTimeout(saveTimer);
   sessionId.value = null;
-  localStorage.removeItem(activeIdKey());
+  localStorage.removeItem(botIdKey());
   msgs.value = [];
   // 新会话回到首屏欢迎屏：重取一次今日速览（不再重播每日播报，避免与速览重复）
   void loadOverview();
@@ -508,7 +588,7 @@ async function openHistory() {
   // 打开前把当前会话落库，保证列表含最新一条
   if (msgs.value.length) await persistSession();
   try {
-    sessions.value = (await agentApi.listSessions())?.sessions ?? [];
+    sessions.value = (await agentApi.listSessions(botKey.value))?.sessions ?? [];
   } catch {
     sessions.value = [];
   }
@@ -524,7 +604,7 @@ async function openSession(id: string) {
     const s: any = await agentApi.getSession(id);
     msgs.value = Array.isArray(s?.messages) ? (s.messages as AgentMsg[]) : [];
     sessionId.value = id;
-    localStorage.setItem(activeIdKey(), id);
+    localStorage.setItem(botIdKey(), id);
     showHistory.value = false;
     scrollBottom();
   } catch (e: any) {
@@ -537,7 +617,7 @@ async function removeSession(id: string) {
     sessions.value = sessions.value.filter((s) => s.id !== id);
     if (id === sessionId.value) {
       sessionId.value = null;
-      localStorage.removeItem(activeIdKey());
+      localStorage.removeItem(botIdKey());
       msgs.value = [];
     }
   } catch (e: any) {
@@ -602,9 +682,9 @@ async function runAgent() {
   sending.value = true;
   scrollBottom();
   try {
-    // 携带最近对话（截断在 16 条内由后端控制）；动作执行结果消息 role=user（系统回报）
+    // 携带最近对话（截断在 16 条内由后端控制）；动作执行结果消息 role=user（系统回报）；bot 决定人设与工具/动作白名单
     const history = msgs.value.slice(-16).map((m) => ({ role: m.role, content: m.text }));
-    const r: any = await agentApi.chat(history, pageContext());
+    const r: any = await agentApi.chat(history, pageContext(), botKey.value);
     msgs.value.push({
       role: 'assistant',
       text: String(r?.reply ?? '（无答复）'),
@@ -882,7 +962,7 @@ async function submitClarifyDaily(m: AgentMsg) {
 async function runAgentQuiet() {
   try {
     const history = msgs.value.slice(-16).map((m) => ({ role: m.role, content: m.text }));
-    const r: any = await agentApi.chat(history, pageContext());
+    const r: any = await agentApi.chat(history, pageContext(), botKey.value);
     msgs.value.push({ role: 'assistant', text: String(r?.reply ?? ''), trace: [] });
   } catch { /* 收尾回合失败不影响主流程 */ }
   saveHistory();
@@ -955,8 +1035,11 @@ async function checkConfig() {
 onMounted(() => {
   initPos();
   void loadOverview(); // 首屏欢迎屏的今日速览（无论哪入口都预取，空会话时直接展示）
-  if (embeddedLike.value) void start(); // 内嵌入口：接续历史 -> 每日播报（串行）
-  else loadHistory();
+  void loadBots().then(() => {
+    // 先确定当前机器人（含恢复上次选择），再按机器人接续会话
+    if (embeddedLike.value) void start();
+    else loadHistory();
+  });
   // 从 /mobile 或模式切换器过来（/?agent=1）：直接展开悬浮窗，且把参数从地址栏清掉，刷新不会反复弹
   if (!embedded.value && route.query.agent === '1') {
     open.value = true;
@@ -1154,6 +1237,44 @@ defineExpose({ checkConfig, start });
   cursor: pointer;
 }
 .agent-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 专属机器人栏：横向头像 + 名称，可横滚；选中高亮蓝 */
+.agent-bots { display: flex; gap: 4px; padding: 8px 10px 4px; overflow-x: auto; background: #fff; border-bottom: 1px solid #eef1f6; }
+.agent-bots::-webkit-scrollbar { height: 0; }
+.agent-bot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px 2px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.agent-bot:disabled { opacity: 0.5; cursor: not-allowed; }
+.agent-bot-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: #428bff;
+  background: #eaf2ff;
+  border: 1.5px solid transparent;
+  transition: all 0.15s;
+}
+.agent-bot:hover .agent-bot-avatar { background: #dcecff; }
+.agent-bot.active .agent-bot-avatar { border-color: #428bff; background: #dcecff; }
+.agent-bot-name { font-size: 11px; color: #6b7280; white-space: nowrap; }
+.agent-bot.active .agent-bot-name { color: #428bff; font-weight: 500; }
+/* 专属机器人空会话开场白 */
+.agent-bot-greet { text-align: left; padding: 8px 4px; }
+.agent-bot-greet .agent-bubble-agent { white-space: pre-wrap; }
+.agent-bot-desc { font-size: 11px; color: #9ca3af; margin-top: 8px; padding-left: 4px; }
 /* 空会话能力清单：分组 + 每条都可点 */
 .agent-cap-hd { color: #6b7280; margin-bottom: 8px; }
 .agent-cap-group { margin-bottom: 6px; }
