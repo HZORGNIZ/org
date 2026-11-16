@@ -36,31 +36,34 @@
       </div>
     </div>
 
-    <!-- 三模式切换：工作台 / 机器人（悬浮窗）/ 助理 Agent（/mobile）；内嵌页左侧多一个「首页」直达 -->
-    <div class="agent-mode-row">
-      <button v-if="embedded" class="agent-home-btn" title="回到工作台首页" @click="router.push('/')">⌂ 首页</button>
-      <span v-else></span>
-      <AssistantModeSwitch :current="mode === 'floating' ? 'robot' : 'agent'" compact @switch="onModeSwitch" />
-    </div>
+    <!-- 主体：左侧机器人竖排导航 + 右侧聊天区 -->
+    <div class="agent-body">
+      <!-- 专属机器人栏（左侧竖排）：点击切换人设与能力（清单来自 /agent/config，按档位收敛；催办/通知类仅管理者档可见） -->
+      <div class="agent-bots">
+        <button
+          v-for="b in bots"
+          :key="b.key"
+          class="agent-bot"
+          :class="{ active: b.key === botKey }"
+          :title="b.desc"
+          :disabled="sending"
+          @click="switchBot(b.key)"
+        >
+          <span class="agent-bot-avatar">{{ b.short }}</span>
+          <span class="agent-bot-name">{{ b.name }}</span>
+        </button>
+      </div>
 
-    <!-- 专属机器人栏：点击切换人设与能力（清单来自 /agent/config，按档位收敛；催办/通知类仅管理者档可见） -->
-    <div class="agent-bots">
-      <button
-        v-for="b in bots"
-        :key="b.key"
-        class="agent-bot"
-        :class="{ active: b.key === botKey }"
-        :title="b.desc"
-        :disabled="sending"
-        @click="switchBot(b.key)"
-      >
-        <span class="agent-bot-avatar">{{ b.short }}</span>
-        <span class="agent-bot-name">{{ b.name }}</span>
-      </button>
-    </div>
+      <div class="agent-main">
+        <!-- 三模式切换：工作台 / 机器人（悬浮窗）/ 助理 Agent（/mobile）；内嵌页左侧多一个「首页」直达 -->
+        <div class="agent-mode-row">
+          <button v-if="embedded" class="agent-home-btn" title="回到工作台首页" @click="router.push('/')">⌂ 首页</button>
+          <span v-else></span>
+          <AssistantModeSwitch :current="mode === 'floating' ? 'robot' : 'agent'" compact @switch="onModeSwitch" />
+        </div>
 
     <!-- 历史会话面板（服务端持久）：列表/切换/删除 -->
-    <div v-if="showHistory" class="agent-history">
+      <div v-if="showHistory" class="agent-history">
       <div class="agent-history-hd">
         <span>历史会话</span>
         <button class="agent-mini-btn" @click="showHistory = false">返回当前会话</button>
@@ -214,6 +217,8 @@
         <el-icon><Promotion /></el-icon>
       </el-button>
     </div>
+      </div><!-- /agent-main -->
+    </div><!-- /agent-body -->
   </div>
 </template>
 
@@ -532,7 +537,7 @@ function onResize() {
 }
 
 /** 面板锚点：贴屏幕左半→面板往右展开，反之往左（PANEL_W 与 .agent-panel 的 width 保持一致） */
-const PANEL_W = 420;
+const PANEL_W = 460;
 const panelStyle = computed(() => {
   const winW = window.innerWidth;
   const winH = window.innerHeight;
@@ -543,7 +548,7 @@ const panelStyle = computed(() => {
     left: onLeft ? `${Math.max(8, Math.min(pos.x, winW - panelW - 8))}px` : undefined,
     // 右侧锚定：右偏移不能太靠左，否则面板会挤出屏幕左侧
     right: onLeft ? undefined : `${Math.max(8, Math.min(winW - pos.x - BALL_SIZE, winW - panelW - 8))}px`,
-    top: `${Math.min(pos.y, Math.max(8, winH - 560))}px`,
+    top: `${Math.min(pos.y, Math.max(8, winH - 580))}px`,
   };
 });
 
@@ -1177,8 +1182,8 @@ defineExpose({ checkConfig, start });
 .agent-panel {
   position: fixed;
   z-index: 3001;
-  width: min(92vw, 420px);
-  height: min(72vh, 540px);
+  width: min(92vw, 460px);
+  height: min(72vh, 560px);
   background: #fff;
   border-radius: 14px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
@@ -1331,20 +1336,46 @@ defineExpose({ checkConfig, start });
   cursor: pointer;
 }
 .agent-chip:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 专属机器人栏：横向头像 + 名称，可横滚；选中高亮蓝 */
-.agent-bots { display: flex; gap: 4px; padding: 8px 10px 4px; overflow-x: auto; background: #fff; border-bottom: 1px solid #eef1f6; }
-.agent-bots::-webkit-scrollbar { height: 0; }
+/* 主体：左侧机器人竖排导航 + 右侧聊天区 */
+.agent-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.agent-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* 专属机器人栏：左侧竖排头像 + 名称，可纵向滚动；选中高亮蓝 */
+.agent-bots {
+  flex: 0 0 auto;
+  width: 66px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px;
+  overflow-y: auto;
+  background: #fff;
+  border-right: 1px solid #eef1f6;
+}
+.agent-bots::-webkit-scrollbar { width: 0; }
 .agent-bot {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 4px 8px 2px;
+  padding: 2px 2px;
   border: none;
   background: transparent;
   border-radius: 10px;
   cursor: pointer;
+  width: 60px;
 }
 .agent-bot:disabled { opacity: 0.5; cursor: not-allowed; }
 .agent-bot-avatar {
@@ -1363,8 +1394,13 @@ defineExpose({ checkConfig, start });
 }
 .agent-bot:hover .agent-bot-avatar { background: #dcecff; }
 .agent-bot.active .agent-bot-avatar { border-color: #428bff; background: #dcecff; }
-.agent-bot-name { font-size: 11px; color: #6b7280; white-space: nowrap; }
+.agent-bot-name { font-size: 10px; color: #6b7280; white-space: nowrap; }
 .agent-bot.active .agent-bot-name { color: #428bff; font-weight: 500; }
+/* 手机全屏入口：左栏更窄只留头像，腾出聊天宽度 */
+.agent-panel-mobile .agent-bots { width: 48px; padding: 8px 2px; }
+.agent-panel-mobile .agent-bot { width: 44px; }
+.agent-panel-mobile .agent-bot-name { display: none; }
+.agent-panel-mobile .agent-bot-avatar { width: 32px; height: 32px; font-size: 10px; }
 /* 专属机器人空会话开场白 */
 .agent-bot-greet { text-align: left; padding: 8px 4px; }
 .agent-bot-greet .agent-bubble-agent { white-space: pre-wrap; }
