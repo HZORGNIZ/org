@@ -154,7 +154,26 @@ export class TaskReminderService {
         ccItems.push({ userId, name: user.name, summary: `${list.length} 个任务逾期未完成` });
         this.logger.log(`逾期提醒已私聊「${user.name}」（${list.length} 个任务，via ${target.via}）`);
       } else {
-        this.logger.error(`逾期提醒发送失败（${user.name} → ${target.to}）: ${r.error}`);
+        // 钉钉私聊失败（常见：成员不在钉钉通讯录/身份未绑定）→ 降级站内通知，
+        // 并更新 lastRemindAt 停止逐小时重试，避免日志报错刷屏；用户在系统内仍能看到提醒
+        this.logger.error(`逾期提醒发送失败（${user.name} → ${target.to}）: ${r.error}，已降级站内通知`);
+        try {
+          await this.prisma.notification.create({
+            data: {
+              userId,
+              type: 'TASK',
+              title: `⏰ 任务逾期提醒（${list.length} 个）`,
+              content: `钉钉私聊未送达（${target.via === 'name' ? '钉钉通讯录未找到你' : '发送失败'}），以下是逾期任务：\n${text}`,
+              link: '/tasks',
+            },
+          });
+          await this.prisma.task.updateMany({
+            where: { id: { in: list.map((t) => t.id) } },
+            data: { lastRemindAt: now },
+          });
+        } catch (e: any) {
+          this.logger.warn(`逾期提醒降级站内通知失败（${user.name}）: ${e?.message ?? e}`);
+        }
       }
       items.push({ userId, name: user.name, to: target.to, via: target.via, taskCount: list.length, text, sent: r.ok, error: r.error });
     }
