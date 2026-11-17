@@ -96,7 +96,7 @@
         <template v-if="isScheduleOwner && scheduleWeek.length">
           <div class="agent-week-title">本周空闲时间（绿=可约）</div>
           <div class="agent-week-grid">
-            <div v-for="d in scheduleWeek" :key="d.date" class="agent-week-col" :class="{ 'week-today': d.date === todayStr }">
+            <div v-for="d in scheduleWeek" :key="d.date" class="agent-week-col" :class="{ 'week-today': d.date === todayDateStr }">
               <div class="agent-week-date">{{ d.date.slice(5) }}<small>{{ d.weekday.slice(0, 3) }}</small></div>
               <span v-for="(f, fi) in d.free.slice(0, 3)" :key="fi" class="agent-week-free">{{ f.time }}</span>
               <span v-if="!d.free.length" class="agent-week-none">满</span>
@@ -434,7 +434,7 @@ const scheduleWeek = ref<any[]>([]);
 const mydayToday = ref<any>(null);
 const schedCardDismissed = ref(false);
 const isScheduleOwner = computed(() => !!curBot.value?.scheduleOwner && (auth.user?.name ?? '') === curBot.value.scheduleOwner);
-const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10); // 本地时区今天（周网格高亮用）
+const todayDateStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10); // 本地时区今天（周网格高亮用）
 async function loadScheduleCard() {
   schedulePending.value = [];
   scheduleMine.value = [];
