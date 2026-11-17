@@ -186,6 +186,11 @@
       <el-tab-pane label="任务看板" name="board">
         <TaskBoardPanel ref="boardRef" @open-task="openTask" />
       </el-tab-pane>
+
+      <!-- 我的日程：一天的工作行程（上班时间/会议/预约/我的安排/空余），信息与智能体「我的日程」打通 -->
+      <el-tab-pane label="我的日程" name="myday" lazy>
+        <MyScheduleTab />
+      </el-tab-pane>
     </el-tabs>
 
     <TaskFormDialog v-model="showForm" @saved="onTaskChanged" />
@@ -206,20 +211,22 @@ import TaskFormDialog from '../components/TaskFormDialog.vue';
 import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
 import TaskBoardPanel from '../components/TaskBoardPanel.vue';
 import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
+import MyScheduleTab from '../components/MyScheduleTab.vue';
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-/** 大 tab：任务列表 / 任务看板；与地址栏 ?tab=board 同步（首页「去看板」等入口直达看板） */
-type TabKey = 'list' | 'board';
-const tab = ref<TabKey>(route.query.tab === 'board' ? 'board' : 'list');
+/** 大 tab：任务列表 / 任务看板 / 我的日程；与地址栏 ?tab=board|myday 同步（首页等入口直达） */
+type TabKey = 'list' | 'board' | 'myday';
+const tab = ref<TabKey>(route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : 'list');
 const boardRef = ref<InstanceType<typeof TaskBoardPanel> | null>(null);
 
 function onTabChange(name: any) {
-  tab.value = name === 'board' ? 'board' : 'list';
+  tab.value = name === 'board' ? 'board' : name === 'myday' ? 'myday' : 'list';
   const q = { ...route.query };
   if (tab.value === 'board') q.tab = 'board';
+  else if (tab.value === 'myday') q.tab = 'myday';
   else delete q.tab;
   router.replace({ query: q });
   // 从看板切回列表时重新拉一次，避免在看板里改过状态后列表是旧的
@@ -228,7 +235,7 @@ function onTabChange(name: any) {
 watch(
   () => route.query.tab,
   (v) => {
-    const t: TabKey = v === 'board' ? 'board' : 'list';
+    const t: TabKey = v === 'board' ? 'board' : v === 'myday' ? 'myday' : 'list';
     if (t !== tab.value) tab.value = t;
   },
 );

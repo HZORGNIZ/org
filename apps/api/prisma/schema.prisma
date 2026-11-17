@@ -258,6 +258,7 @@ model User {
   bookingAsOwner MeetingBooking[] @relation("BookingOwner") // 别人约我（我是被约的老师）
   bookingAsRequester MeetingBooking[] @relation("BookingRequester") // 我发起的预约
   timeSlots UserTimeSlot[] // 一次性可约/不可约时段（老师临时调整）
+  personalEvents PersonalEvent[] // 我的日程：个人安排的事项与开放可约时段
 
   department     Department? @relation("DeptMembers", fields: [departmentId], references: [id], onDelete: SetNull)
   reportsTo      User?    @relation("UserReports", fields: [reportsToId], references: [id], onDelete: SetNull)
@@ -1388,6 +1389,7 @@ model MeetingBooking {
   status      String    @default("PENDING") // PENDING=待老师确认 / CONFIRMED / REJECTED / CANCELLED
   decideNote  String? // 老师确认/驳回时的意见
   decidedAt   DateTime?
+  remindedAt  DateTime? // 会前材料提醒已发送时间（开始前 2 小时私聊提醒发起人，防重复）
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -1397,6 +1399,27 @@ model MeetingBooking {
   @@index([ownerId, startAt])
   @@index([requesterId, startAt])
   @@index([status])
+}
+
+// 个人日程事件：「我的日程」时间轴里自己安排的事项（这个时间我要做什么）
+// 与 UserTimeSlot（临时可约/不可约）区分：EVENT=日程事项 / FREE=开放可约 / BUSY=占用不可约
+model PersonalEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime // 当天 00:00（北京墙钟字面量）
+  startMin  Int // 当天分钟数，如 15:00 = 900
+  endMin    Int
+  kind      String   @default("EVENT") // EVENT=日程安排 / FREE=开放可约 / BUSY=占用
+  title     String // 事项名称（如「写季度总结」）
+  note      String?
+  source    String   @default("manual") // manual=页面添加 / agent=智能体创建
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
 }
 
 // 团队级配置（KV）

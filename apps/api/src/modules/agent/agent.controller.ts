@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { CurrentUser, CurrentUserPayload } from '../../common/current-user.decorator';
 import { Roles } from '../../common/roles.decorator';
@@ -154,5 +154,44 @@ export class AgentController {
     @Body() body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; note?: string },
   ) {
     return this.agent.setTimeSlot(me, body ?? {});
+  }
+
+  // ---- 我的日程（所有人）：统一时间轴 + 个人日程增删改（工作台 tab / myday 机器人共用） ----
+
+  /** 某天的完整时间轴：上班排班+会议+预约+个人日程+空余 */
+  @Get('schedule/timeline')
+  timeline(@CurrentUser() me: CurrentUserPayload, @Query('date') date?: string) {
+    return this.agent.getTimeline(me, date);
+  }
+
+  /** 未来 7 天时间轴（老师卡片周网格用） */
+  @Get('schedule/week')
+  week(@CurrentUser() me: CurrentUserPayload, @Query('date') date?: string) {
+    return this.agent.getWeekTimeline(me, date);
+  }
+
+  /** 新增个人日程 / 开放可约时段 */
+  @Post('events')
+  createEvent(
+    @CurrentUser() me: CurrentUserPayload,
+    @Body() body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; title?: string; note?: string; source?: string },
+  ) {
+    return this.agent.createEvent(me, body ?? {});
+  }
+
+  /** 编辑个人日程 */
+  @Patch('events/:id')
+  updateEvent(
+    @CurrentUser() me: CurrentUserPayload,
+    @Param('id') id: string,
+    @Body() body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; title?: string; note?: string },
+  ) {
+    return this.agent.updateEvent(me, id, body ?? {});
+  }
+
+  /** 删除个人日程 */
+  @Delete('events/:id')
+  deleteEvent(@CurrentUser() me: CurrentUserPayload, @Param('id') id: string) {
+    return this.agent.deleteEvent(me, id);
   }
 }

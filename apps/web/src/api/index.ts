@@ -441,6 +441,18 @@ export const agentApi = {
   /** 老师登记一次性时段（临时可约/不可约），只能写自己的 */
   setTimeSlot: (data: { date: string; startMin: number | string; endMin: number | string; kind?: string; note?: string }) =>
     api.post<{ ok: boolean; id: string; date: string; range: string; kind: string }>('/agent/time-slots', data),
+  /** 我的日程：某天完整时间轴（上班排班+会议+预约+个人日程+空余） */
+  timeline: (date?: string) => api.get<any>('/agent/schedule/timeline', { date }),
+  /** 我的日程：未来 7 天时间轴（周网格设置可约用） */
+  week: (date?: string) => api.get<any>('/agent/schedule/week', { date }),
+  /** 新增个人日程 / 开放可约时段（EVENT=日程安排 / FREE=开放可约 / BUSY=占用） */
+  createEvent: (data: { date: string; startMin: number | string; endMin: number | string; kind?: string; title?: string; note?: string; source?: string }) =>
+    api.post<{ ok: boolean; id: string; warning: string | null }>('/agent/events', data),
+  /** 编辑个人日程 */
+  updateEvent: (id: string, data: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; title?: string; note?: string }) =>
+    api.put<any>(`/agent/events/${id}`, data),
+  /** 删除个人日程 */
+  deleteEvent: (id: string) => api.del<any>(`/agent/events/${id}`),
 };
 
 // ---------- 使用体验反馈（首页提交、落库后同步公司群；后台按状态管理 + AI 总结） ----------
