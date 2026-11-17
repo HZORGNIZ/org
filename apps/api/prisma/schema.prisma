@@ -1420,7 +1420,6 @@ model PersonalEvent {
 
   @@index([userId, date])
 }
-}
 
 // 团队级配置（KV）
 model Setting {
