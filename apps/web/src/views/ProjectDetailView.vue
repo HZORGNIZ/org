@@ -1596,7 +1596,7 @@ function isoWeekOf(d: Date): string {
 }
 const currentWeekKey = computed(() => isoWeekOf(new Date()));
 
-const docChipList = computed(() => {
+const docChipList = computed<{ key: 'all' | 'week' | 'doc' | 'other'; label: string; count: number }[]>(() => {
   const items = docCenterItems.value;
   return [
     { key: 'all', label: '全部', count: items.length },
