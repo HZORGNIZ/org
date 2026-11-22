@@ -531,44 +531,67 @@
         <div v-if="weeklyErr" class="muted weekly-err">{{ weeklyErr }}</div>
         <div v-else-if="!weeklySummary" class="muted weekly-tip">点「AI 总结」由 AI 汇总本周全员周报（总览/进展/下周/风险/需关注）；「查看完整项目周报」阅读每人的「姓名·部门·内容」。</div>
       </div>
+      <!-- 本周文档：按周归组的成员上传文档（与文档中心同一数据源，可切历史周次） -->
+      <div class="page-card weekly-card">
+        <div class="block-title-row">
+          <span class="block-title">本周文档（{{ currentWeekKey }}）</span>
+          <div class="weekly-ops">
+            <el-select v-model="weekDocKey" size="small" style="width: 130px">
+              <el-option v-for="w in weekKeys" :key="w" :label="w" :value="w" />
+            </el-select>
+            <el-button size="small" type="primary" plain @click="goDocCenter">到文档中心上传</el-button>
+          </div>
+        </div>
+        <div v-if="!weekDocs.length" class="muted doc-empty">{{ weekDocKey === currentWeekKey ? '本周还没有人上传文档' : '该周没有文档记录' }}</div>
+        <div v-for="it in weekDocs" :key="it.kind + it.id" class="doccenter-row">
+          <span class="doc-badge" :class="'b-' + badgeOf(it)">{{ badgeText(it) }}</span>
+          <div class="doccenter-main" @click="previewDoc(it)">
+            <div class="ellipsis doc-name">{{ it.name }}</div>
+            <div class="doccenter-meta">{{ it.uploaderName }} · {{ it.updatedAt?.slice(5, 10) }}</div>
+          </div>
+          <el-button size="small" text type="primary" @click="previewDoc(it)">预览</el-button>
+          <el-button v-if="it.kind === 'file'" size="small" text @click="downloadDocFile(it)">下载</el-button>
+        </div>
+      </div>
       </el-tab-pane>
 
       <el-tab-pane name="docs">
         <template #label>项目文档</template>
-        <!-- 文档空间（合并：在线项目文档 + 项目文件空间；看板已移除此页，看板功能仍在独立 /board 路由） -->
+        <!-- 文档中心：在线文档 + 文件空间文件统一列表，在线预览/下载/编辑，顶部一键上传本周文档 -->
         <div class="page-card">
           <div class="block-title-row">
-            <span class="block-title">文档空间</span>
-            <!-- 在线文档多了以后靠类型收敛；文件空间内另有独立的类型筛选 -->
-            <el-select
-              v-if="projDocs.length"
-              v-model="docFilterType"
+            <span class="block-title">项目文档中心</span>
+            <el-input
+              v-model="docSearch"
               size="small"
-              placeholder="全部类型"
+              placeholder="搜索文档…"
               clearable
-              filterable
-              style="width: 140px"
-            >
-              <el-option v-for="t in docTypeChoices" :key="t" :label="t" :value="t" />
-            </el-select>
+              style="width: 180px"
+            />
+            <el-button size="small" @click="docFormVisible = true">+ 新建在线文档</el-button>
+            <el-button size="small" @click="docSpaceVisible = true">文件空间</el-button>
+            <el-button size="small" type="primary" :loading="weekUploading" @click="weekFileInput?.click()">上传本周文档</el-button>
+            <input ref="weekFileInput" type="file" multiple hidden @change="onWeekFilesPicked" />
           </div>
-          <div class="muted doc-empty">
-            在线项目文档（可按类型归档），以及可新建文件夹、拖拽上传、保留历史版本、docx 在线编辑的文件空间
+          <div class="doc-chips">
+            <span v-for="c in docChipList" :key="c.key" class="doc-chip" :class="{ active: docTab === c.key }" @click="docTab = c.key">
+              {{ c.label }} {{ c.count }}
+            </span>
           </div>
-          <div v-if="!docFilteredDocs.length" class="muted doc-empty">
-            {{ projDocs.length ? '该类型下暂无在线项目文档' : '暂无在线项目文档' }}
+          <div v-if="!docCenterFiltered.length" class="muted doc-empty">没有符合条件的文档</div>
+          <div v-for="it in docCenterFiltered" :key="it.kind + it.id" class="doccenter-row">
+            <span class="doc-badge" :class="'b-' + badgeOf(it)">{{ badgeText(it) }}</span>
+            <div class="doccenter-main" @click="previewDoc(it)">
+              <div class="ellipsis doc-name">{{ it.name }}</div>
+              <div class="doccenter-meta">{{ docCenterMeta(it) }}</div>
+            </div>
+            <el-tag size="small" effect="plain" class="doc-week-tag">{{ it.weekKey }}</el-tag>
+            <el-button size="small" text type="primary" @click="previewDoc(it)">预览</el-button>
+            <el-button v-if="it.kind === 'file'" size="small" text @click="downloadDocFile(it)">下载</el-button>
+            <el-button v-else size="small" text @click="openProjectDoc(it)">编辑</el-button>
           </div>
-          <div v-for="d in docFilteredDocs" :key="d.id" class="doc-row" @click="openProjectDoc(d)">
-            <span class="ellipsis doc-name">{{ d.title }}</span>
-            <!-- 文档类型（未分类不占位，避免一排「未分类」噪声） -->
-            <el-tag v-if="d.docType" size="small" effect="plain" :type="docTypeMeta(d.docType).color">{{ d.docType }}</el-tag>
-            <el-tag size="small" :type="DOC_VIS_TYPE[d.visibility] || 'info'" effect="plain">
-              {{ DOC_VIS_LABEL[d.visibility] || d.visibility }}
-            </el-tag>
-          </div>
-          <div class="doc-space-actions">
-            <el-button size="small" @click="docFormVisible = true">+ 上传项目文档</el-button>
-            <el-button size="small" type="primary" plain @click="docSpaceVisible = true">打开文件空间</el-button>
+          <div class="muted doc-empty" style="margin-top: 10px">
+            上传的文档自动归入本周（按 ISO 周计）；「周报文档」类可在项目周报页按周查看
           </div>
         </div>
       </el-tab-pane>
@@ -872,6 +895,9 @@
       <DocumentSpace v-if="docSpaceVisible && project" scope="project" :target-id="project.id" />
     </el-drawer>
 
+    <!-- 通用文档预览（PDF/图片/docx/文本/csv，在线文档走 Markdown 渲染） -->
+    <DocPreview v-model="docPreviewVisible" :item="docPreviewItem" />
+
     <TaskFormDialog v-model="taskFormVisible" :default-project-id="project?.id" @saved="load" />
     <TaskDetailDrawer v-model="taskDrawer" :task-id="currentTaskId" @changed="load" />
   </div>
@@ -882,13 +908,14 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import dayjs from 'dayjs';
-import { projectsApi, tasksApi, usersApi, departmentsApi, knowledgeApi, filesApi } from '../api';
+import { projectsApi, tasksApi, usersApi, departmentsApi, knowledgeApi, filesApi, documentsApi } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { TASK_PRIORITY, TASK_STATUS, fmt, isToday, updateDate } from '../utils/format';
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
 import { docTypeMeta, docTypeOptions } from '../utils/doc-types';
 import MarkdownView from '../components/MarkdownView.vue';
 import DocumentSpace from '../components/DocumentSpace.vue';
+import DocPreview from '../components/DocPreview.vue';
 import ConvertTaskDialog from '../components/ConvertTaskDialog.vue';
 import TaskFormDialog from '../components/TaskFormDialog.vue';
 import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
@@ -1505,7 +1532,6 @@ function syncEditForm() {
 
 // ---- 项目文档（复用知识库：visibility=PROJECT，项目成员与主要关联部门负责人可见） ----
 const DOC_VIS_LABEL: Record<string, string> = { PUBLIC: '团队', DEPARTMENT: '部门', PROJECT: '项目', PRIVATE: '个人' };
-const DOC_VIS_TYPE: Record<string, string> = { PUBLIC: 'info', DEPARTMENT: 'success', PROJECT: 'primary', PRIVATE: 'warning' };
 const projDocs = ref<any[]>([]);
 const docFormVisible = ref(false);
 /** 项目文档空间（二进制文件）抽屉 */
@@ -1514,11 +1540,6 @@ const docSaving = ref(false);
 const docForm = reactive({ title: '', content: '', docType: '' });
 /** 类型下拉：预置词表 + 本项目已用过的自定义类型 */
 const docTypeChoices = computed(() => docTypeOptions(projDocs.value.map((d: any) => d.docType)));
-/** 在线文档列表的类型筛选（本地过滤，列表本就是一次拉全量） */
-const docFilterType = ref('');
-const docFilteredDocs = computed(() =>
-  docFilterType.value ? projDocs.value.filter((d: any) => (d.docType || '') === docFilterType.value) : projDocs.value,
-);
 const docDetailVisible = ref(false);
 const currentDoc = ref<any>(null);
 
@@ -1553,6 +1574,150 @@ async function loadProjDocs() {
   if (!id) return;
   projDocs.value = await knowledgeApi.list({ projectId: id }).catch(() => []);
 }
+
+// ---- 文档中心：在线文档 + 文件空间文件统一聚合（预览/下载/按周归组） ----
+const WEEK_DOC_TYPE = '周报文档'; // 走「上传本周文档」入口的文件统一打此类型，周报页按周查看
+const docCenterItems = ref<any[]>([]);
+const docSearch = ref('');
+const docTab = ref<'all' | 'week' | 'doc' | 'other'>('all');
+const docPreviewVisible = ref(false);
+const docPreviewItem = ref<any>(null);
+const weekUploading = ref(false);
+const weekFileInput = ref<HTMLInputElement | null>(null);
+
+/** ISO 周标记（与后端同算法）：2026-W47 */
+function isoWeekOf(d: Date): string {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+const currentWeekKey = computed(() => isoWeekOf(new Date()));
+
+const docChipList = computed(() => {
+  const items = docCenterItems.value;
+  return [
+    { key: 'all', label: '全部', count: items.length },
+    { key: 'week', label: '周报文档', count: items.filter((i: any) => i.docType === WEEK_DOC_TYPE).length },
+    { key: 'doc', label: '在线文档', count: items.filter((i: any) => i.kind === 'doc').length },
+    { key: 'other', label: '其他文件', count: items.filter((i: any) => i.kind === 'file' && i.docType !== WEEK_DOC_TYPE).length },
+  ];
+});
+
+const docCenterFiltered = computed(() => {
+  let items = docCenterItems.value;
+  const kw = docSearch.value.trim().toLowerCase();
+  if (kw) items = items.filter((i: any) => (i.name || '').toLowerCase().includes(kw));
+  if (docTab.value === 'week') items = items.filter((i: any) => i.docType === WEEK_DOC_TYPE);
+  else if (docTab.value === 'doc') items = items.filter((i: any) => i.kind === 'doc');
+  else if (docTab.value === 'other') items = items.filter((i: any) => i.kind === 'file' && i.docType !== WEEK_DOC_TYPE);
+  return items;
+});
+
+const weekKeys = computed(() =>
+  Array.from(new Set(docCenterItems.value.map((i: any) => i.weekKey).filter(Boolean) as string[])).sort().reverse(),
+);
+const weekDocKey = ref('');
+watch(weekKeys, (ks) => {
+  if (!weekDocKey.value || !ks.includes(weekDocKey.value)) weekDocKey.value = ks[0] ?? '';
+}, { immediate: true });
+const weekDocs = computed(() =>
+  docCenterItems.value.filter((i: any) => i.weekKey === weekDocKey.value && i.docType === WEEK_DOC_TYPE),
+);
+
+async function loadDocCenter() {
+  const id = String(route.params.id ?? '');
+  if (!id) return;
+  docCenterItems.value = await documentsApi
+    .projectAll(id)
+    .then((r: any) => r?.items ?? [])
+    .catch(() => []);
+}
+
+/** 类型徽标文案：按扩展名归类展示 */
+function badgeOf(it: any): string {
+  const ext = (it.name || '').includes('.') ? (it.name || '').split('.').pop()!.toLowerCase() : '';
+  if (it.kind === 'doc' || ['md', 'txt', 'log', 'json', 'yml', 'yaml', 'xml'].includes(ext)) return 'text';
+  if (ext === 'pdf') return 'pdf';
+  if (['doc', 'docx'].includes(ext)) return 'doc';
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return 'sheet';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+  return 'file';
+}
+function badgeText(it: any): string {
+  const map: Record<string, string> = { text: '文档', pdf: 'PDF', doc: 'DOC', sheet: '表格', image: '图片', file: '文件' };
+  return map[badgeOf(it)] ?? '文件';
+}
+
+function docCenterMeta(it: any): string {
+  const size = it.size ? fmtSize(it.size) : '';
+  const time = it.updatedAt ? String(it.updatedAt).slice(5, 10) : '';
+  return [size, it.uploaderName, time].filter(Boolean).join(' · ');
+}
+
+function previewDoc(it: any) {
+  docPreviewItem.value = {
+    kind: it.kind,
+    id: it.id,
+    name: it.name,
+    mimeType: it.mimeType,
+    size: it.size,
+    uploaderName: it.uploaderName,
+    updatedAt: it.updatedAt,
+    previewKind: it.kind === 'doc' ? 'text' : it.previewKind,
+  };
+  docPreviewVisible.value = true;
+}
+
+async function downloadDocFile(it: any) {
+  try {
+    const blob = await documentsApi.content(it.id);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = it.name;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    ElMessage.error('下载失败');
+  }
+}
+
+/** 上传本周文档：逐个上传并统一打「周报文档」类型（自动归当前 ISO 周） */
+async function onWeekFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = '';
+  if (!files.length || !project.value) return;
+  weekUploading.value = true;
+  let ok = 0;
+  try {
+    for (const f of files) {
+      try {
+        await documentsApi.upload(f, { scope: 'project', targetId: project.value.id, docType: WEEK_DOC_TYPE });
+        ok += 1;
+      } catch (e: any) {
+        ElMessage.warning(`「${f.name}」上传失败：${e?.response?.data?.message || '未知错误'}`);
+      }
+    }
+    if (ok) {
+      ElMessage.success(`已上传 ${ok} 个文档，归入本周（${currentWeekKey.value}）`);
+      docTab.value = 'week';
+      await loadDocCenter();
+    }
+  } finally {
+    weekUploading.value = false;
+  }
+}
+
+/** 从周报页跳到文档中心并选中「周报文档」分类 */
+function goDocCenter() {
+  docTab.value = 'week';
+  activeTab.value = 'docs';
+}
+
 
 async function openProjectDoc(d: any) {
   currentDoc.value = await knowledgeApi.get(d.id).catch(() => d);
@@ -1605,6 +1770,7 @@ async function load() {
     loadMeetings(); // 项目会议列表，失败不阻断详情
     loadWeekly(); // 项目周报就绪度与 AI 总结，失败不阻断详情
     loadProjDocs(); // 项目文档，失败不阻断详情
+    loadDocCenter(); // 文档中心聚合，失败不阻断详情
     syncEditForm();
     transferUserId.value = '';
   } catch (e: any) {
@@ -2470,6 +2636,88 @@ const infoOpen = ref(false);
 .doc-empty {
   font-size: 13px;
   padding: 6px 0;
+}
+/* 文档中心：分类 chips + 统一列表行 */
+.doc-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+}
+.doc-chip {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 12px;
+  border: 1px solid #e4e7ed;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+}
+.doc-chip.active {
+  background: #185fa5;
+  border-color: #185fa5;
+  color: #fff;
+}
+.doccenter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-bottom: 1px solid #f5f7fa;
+}
+.doccenter-row:last-of-type {
+  border-bottom: none;
+}
+.doccenter-row:hover {
+  background: #f8fafc;
+}
+.doccenter-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.doccenter-meta {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 1px;
+}
+.doc-badge {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.doc-badge.b-pdf {
+  background: #fcebeb;
+  color: #a32d2d;
+}
+.doc-badge.b-doc {
+  background: #e6f1fb;
+  color: #185fa5;
+}
+.doc-badge.b-sheet {
+  background: #eaf3de;
+  color: #3b6d11;
+}
+.doc-badge.b-text {
+  background: #f1efe8;
+  color: #5f5e5a;
+}
+.doc-badge.b-image {
+  background: #fbeaf0;
+  color: #993556;
+}
+.doc-badge.b-file {
+  background: #f4f5f7;
+  color: #6b7280;
+}
+.doc-week-tag {
+  flex: 0 0 auto;
 }
 /* 文档附件：详情抽屉里的附件清单 */
 .doc-att {

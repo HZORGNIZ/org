@@ -55,6 +55,16 @@ export class DocumentsController {
     return this.documents.space(this.ctx(user), { scope, targetId, folderId, keyword, docType });
   }
 
+  /** 项目文档中心聚合：文件空间文件 + 在线文档一次拉全（文档 tab 与周报 tab 的「本周文档」共用） */
+  @Get('project/:projectId/all')
+  projectAll(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('projectId') projectId: string,
+    @Query('keyword') keyword?: string,
+  ) {
+    return this.documents.projectAll(this.ctx(user), projectId, keyword);
+  }
+
   @Get('breadcrumb/:folderId')
   breadcrumb(@CurrentUser() user: CurrentUserPayload, @Param('folderId') folderId: string) {
     return this.documents.breadcrumb(this.ctx(user), folderId);

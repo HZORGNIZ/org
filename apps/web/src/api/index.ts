@@ -992,6 +992,12 @@ export type DocSpaceScope = 'department' | 'project';
 export type DocConflictPolicy = 'version' | 'overwrite' | 'rename';
 
 export const documentsApi = {
+  /** 项目文档中心聚合：文件空间文件 + 在线文档一次拉全（含 weekKey 周标记与 previewKind 预览类型） */
+  projectAll: (projectId: string, keyword?: string) =>
+    api.get<{ projectId: string; projectName: string; canManage: boolean; items: any[] }>(
+      `/documents/project/${projectId}/all`,
+      { keyword: keyword || undefined },
+    ),
   /** 空间列表：当前文件夹下的子文件夹与文件（keyword 有值时为全空间搜索；docType 为类型筛选，同样跨文件夹） */
   space: (params: { scope: DocSpaceScope; targetId: string; folderId?: string | null; keyword?: string; docType?: string }) =>
     api.get<any>('/documents/space', {

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { FileApproval, FileVisibility, Prisma, Role } from '@prisma/client';
+import { DocVisibility, FileApproval, FileVisibility, Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
@@ -28,6 +28,17 @@ type ResolvedSpace = {
 };
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** 预览方式分类：前端据此选择预览渲染器（DocPreview 组件） */
+function previewKindOf(name: string, mimeType: string): 'pdf' | 'image' | 'docx' | 'text' | 'sheet' | 'none' {
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
+  if (mimeType === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (isEditableDocx(name, mimeType)) return 'docx';
+  if (['xlsx', 'xls', 'csv'].includes(ext)) return 'sheet';
+  if (mimeType.startsWith('text/') || ['md', 'txt', 'log', 'json', 'yml', 'yaml', 'xml', 'html'].includes(ext)) return 'text';
+  return 'none';
+}
 
 @Injectable()
 export class DocumentsService {
@@ -296,9 +307,88 @@ export class DocumentsService {
     };
   }
 
+  /**
+   * 项目文档中心聚合：一次返回该项目全部文档（文件空间的文件 + 在线文档 KnowledgeDoc）。
+   - 周报文档按上传时间自动归 ISO 周（weekKey，如 2026-W47），前端据此分组，不需要落库字段
+   - previewKind 标记前端预览方式：pdf/image/docx/text/sheet/none
+   */
+  async projectAll(user: SpaceUser, projectId: string, keyword?: string) {
+    const sp = await this.resolveSpace(user, 'project', projectId);
+    const kw = keyword?.trim();
+    const files = await this.prisma.documentFile.findMany({
+      where: {
+        AND: [
+          { projectId: sp.projectId },
+          this.visibleWhere(user),
+          ...(kw ? [{ name: { contains: kw } }] as Prisma.DocumentFileWhereInput[] : []),
+        ],
+      },
+      include: { uploader: { select: { id: true, name: true } }, project: { select: { confidential: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    const docs = await this.prisma.knowledgeDoc.findMany({
+      where: {
+        projectId: sp.projectId,
+        // 与知识库同口径：项目/公开文档所有人都可见，PRIVATE 只认作者（防越权）
+        OR: [{ visibility: { in: [DocVisibility.PROJECT, DocVisibility.PUBLIC] } }, { authorId: user.id }],
+        ...(kw ? { title: { contains: kw } } : {}),
+      },
+      include: { author: { select: { id: true, name: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 500,
+    });
+    const rows = [
+      ...files.map((f) => ({
+        kind: 'file' as const,
+        id: f.id,
+        name: f.name,
+        mimeType: f.mimeType,
+        size: f.size,
+        uploaderName: f.uploader?.name ?? '',
+        updatedAt: f.updatedAt,
+        createdAt: f.createdAt,
+        weekKey: this.isoWeekKey(f.createdAt),
+        editable: isEditableDocx(f.name, f.mimeType),
+        previewKind: previewKindOf(f.name, f.mimeType),
+        confidential: !!f.project?.confidential || false,
+      })),
+      ...docs.map((d) => ({
+        kind: 'doc' as const,
+        id: d.id,
+        name: d.title,
+        mimeType: 'text/markdown',
+        size: Buffer.byteLength(d.content ?? '', 'utf8'),
+        uploaderName: d.author?.name ?? '',
+        updatedAt: d.updatedAt,
+        createdAt: d.createdAt,
+        weekKey: this.isoWeekKey(d.createdAt),
+        editable: true,
+        previewKind: 'text' as const,
+        confidential: false,
+      })),
+    ];
+    rows.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return {
+      projectId: sp.projectId,
+      projectName: sp.name,
+      canManage: sp.canManage,
+      items: rows,
+    };
+  }
+
+  /** ISO 周标记：2026-W47（用于「每周文档」归组，按上传当天计算） */
+  private isoWeekKey(d: Date): string {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const week = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+  }
+
   /** 面包屑：从给定文件夹向上回溯到空间根 */
-  async breadcrumb(user: SpaceUser, folderId: string) {
-    const chain: { id: string; name: string }[] = [];
+  async breadcrumb(user: SpaceUser, folderId: string) {    const chain: { id: string; name: string }[] = [];
     let cursor: string | null = folderId;
     while (cursor && chain.length < 20) {
       const folder = await this.prisma.documentFolder.findUnique({
