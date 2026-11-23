@@ -65,6 +65,10 @@ export const departmentsApi = {
   reportStatus: (id: string) => api.get<any>(`/departments/${id}/report-status`),
   /** 汇报树（管理员可改任意人；部门负责人/共管人可读全树、只可改本部门名册）：{ roots[], flat[], canEditIds[] } */
   reportTree: () => api.get<{ roots: any[]; flat: any[]; canEditIds: string[] }>('/departments/report-tree'),
+  /** 成员任务总览：按部门分组的全员任务/完成度/本周工时/PBC（管理员/部门负责人） */
+  taskOverview: () => api.get<any>('/departments/task-overview'),
+  /** 部门工作看板：成员完成度/PBC/任务数据源 + 部门工时排行 */
+  deptBoard: (id: string) => api.get<any>(`/departments/${id}/board`),
   /** 设置某人直属上级；parentId 传 null 置为根 */
   setReportsTo: (userId: string, parentId: string | null) =>
     api.put<any>('/departments/report-to', { userId, parentId }),

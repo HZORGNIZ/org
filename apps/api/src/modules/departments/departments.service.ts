@@ -99,6 +99,181 @@ export class DepartmentsService {
       .filter((u): u is { id: string; name: string; avatar: string | null } => Boolean(u));
   }
 
+  // ========== 管理端 · 部门工作总览（成员任务/本周工时/PBC 聚合；管理员与部门负责人/共管人专用） ==========
+
+  /** 北京口径当前月份 'YYYY-MM'（PBC 归属月） */
+  private currentMonth(): string {
+    return new Date(Date.now() + CN_OFFSET_MS).toISOString().slice(0, 7);
+  }
+
+  /** 本周一零点（服务器本地口径，与部门详情 reportStatus 一致；周报/日报 periodStart 同源） */
+  private mondayLocal(): Date {
+    const t = new Date();
+    t.setHours(0, 0, 0, 0);
+    const idx = (t.getDay() + 6) % 7;
+    t.setDate(t.getDate() - idx);
+    return t;
+  }
+
+  /** 今日零点（逾期判定基准：dueDate < 今日零点且未完成 = 逾期） */
+  private todayStart(): Date {
+    const t = new Date();
+    t.setHours(0, 0, 0, 0);
+    return t;
+  }
+
+  /**
+   * 批量聚合一批成员的工作数据（任务/本周工时/本月 PBC），总览与部门看板共用。
+   * 返回 map[userId]：{ tasks（未完成在前、逾期最前）, doneCount, openCount, overdueCount, weekHours, pbcStatus }
+   */
+  private async workRowsOf(userIds: string[]) {
+    const empty = () => ({ tasks: [] as any[], doneCount: 0, openCount: 0, overdueCount: 0, weekHours: 0, pbcStatus: null as string | null });
+    const rows = new Map(userIds.map((id) => [id, empty()]));
+    if (!userIds.length) return rows;
+
+    const [tasks, hoursByUser, pbcs] = await Promise.all([
+      this.prisma.task.findMany({
+        where: { assigneeId: { in: userIds } },
+        select: {
+          id: true, title: true, status: true, dueDate: true, progress: true,
+          completedAt: true, assigneeId: true,
+          project: { select: { id: true, name: true } },
+        },
+        orderBy: { dueDate: 'asc' },
+      }),
+      this.prisma.report.groupBy({
+        by: ['ownerId'],
+        where: { type: 'DAILY', ownerId: { in: userIds }, periodStart: { gte: this.mondayLocal() } },
+        _sum: { hours: true },
+      }),
+      this.prisma.pbc.findMany({
+        where: { ownerId: { in: userIds }, month: this.currentMonth() },
+        select: { ownerId: true, status: true },
+      }),
+    ]);
+
+    const today = this.todayStart();
+    for (const t of tasks) {
+      const row = rows.get(t.assigneeId!);
+      if (!row) continue;
+      const overdue = !!t.dueDate && t.dueDate < today && t.status !== 'DONE';
+      if (t.status === 'DONE') {
+        row.doneCount += 1;
+        row.tasks.push({ ...t, overdue: false }); // 已完成任务排在最后，前端折叠
+      } else {
+        row.openCount += 1;
+        if (overdue) row.overdueCount += 1;
+        row.tasks.push({ id: t.id, title: t.title, status: t.status, dueDate: t.dueDate, progress: t.progress, assigneeId: t.assigneeId, project: t.project, overdue });
+      }
+    }
+    // 每人任务排序：逾期 → 未到期未完成 → 已完成
+    for (const row of rows.values()) {
+      row.tasks.sort((a: any, b: any) => {
+        const wa = (a.overdue ? 0 : a.status === 'DONE' ? 2 : 1);
+        const wb = (b.overdue ? 0 : b.status === 'DONE' ? 2 : 1);
+        return wa - wb || (a.dueDate && b.dueDate ? +new Date(a.dueDate) - +new Date(b.dueDate) : 0);
+      });
+    }
+    for (const h of hoursByUser) {
+      const row = rows.get(h.ownerId);
+      if (row) row.weekHours = Math.round((h._sum.hours ?? 0) * 10) / 10;
+    }
+    for (const p of pbcs) {
+      const row = rows.get(p.ownerId);
+      if (row) row.pbcStatus = p.status;
+    }
+    return rows;
+  }
+
+  /** 部门条目聚合（名册 + 每人工作行 + 部门小计），总览与看板共用 */
+  private async deptEntry(dept: { id: string; name: string }) {
+    const members = await this.prisma.user.findMany({
+      where: deptRosterWhere(dept.id),
+      select: { id: true, name: true, avatar: true },
+      orderBy: { name: 'asc' },
+    });
+    const rows = await this.workRowsOf(members.map((m) => m.id));
+    const withRows = members.map((m) => ({ ...m, ...(rows.get(m.id) as any) }));
+    const stats = {
+      total: withRows.reduce((s, m) => s + m.doneCount + m.openCount, 0),
+      done: withRows.reduce((s, m) => s + m.doneCount, 0),
+      open: withRows.reduce((s, m) => s + m.openCount, 0),
+      overdue: withRows.reduce((s, m) => s + m.overdueCount, 0),
+      weekHours: Math.round(withRows.reduce((s, m) => s + m.weekHours, 0) * 10) / 10,
+    };
+    stats.total = stats.done + stats.open;
+    return {
+      id: dept.id,
+      name: dept.name,
+      memberCount: members.length,
+      stats,
+      completionRate: stats.total ? Math.round((stats.done / stats.total) * 100) : 0,
+      members: withRows,
+    };
+  }
+
+  /**
+   * 成员任务总览：按部门手风琴分组，每人任务/完成度/本周工时/本月 PBC。
+   * 可见范围：管理员=全部门；部门负责人/共管人=自己管辖的部门。无权限 → 403。
+   * 附带各部门本周工时排行（管理端一屏看全公司投入）。
+   */
+  async taskOverview(me: { id: string; role: string }) {
+    const depts =
+      me.role === Role.ADMIN
+        ? await this.prisma.department.findMany({ select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] })
+        : await this.prisma.department.findMany({ where: ledDeptWhere(me.id), select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] });
+    if (!depts.length) throw new ForbiddenException('仅管理员或部门负责人/共管人可查看成员任务总览');
+
+    const entries = await Promise.all(depts.map((d) => this.deptEntry(d)));
+    // 逾期多的部门排前面，其次按逾期数/工时直观度
+    entries.sort((a, b) => b.stats.overdue - a.stats.overdue || b.stats.open - a.stats.open);
+    const totals = entries.reduce(
+      (acc, e) => ({
+        members: acc.members + e.memberCount,
+        open: acc.open + e.stats.open,
+        overdue: acc.overdue + e.stats.overdue,
+        weekHours: Math.round((acc.weekHours + e.stats.weekHours) * 10) / 10,
+      }),
+      { members: 0, open: 0, overdue: 0, weekHours: 0 },
+    );
+    const ranking = entries
+      .map((e) => ({ id: e.id, name: e.name, weekHours: e.stats.weekHours, memberCount: e.memberCount }))
+      .sort((a, b) => b.weekHours - a.weekHours);
+    return { depts: entries, totals, ranking, month: this.currentMonth() };
+  }
+
+  /**
+   * 部门工作看板：单部门的成员完成度/PBC/任务三视角数据源 + 全公司部门工时排行。
+   * 权限与 detail 一致：管理员/部门管理者看任意部门；普通成员限自己所在部门。
+   */
+  async deptBoard(id: string, me: { id: string; role: string; departmentId?: string | null }) {
+    const dept = await this.prisma.department.findUnique({
+      where: { id },
+      select: { id: true, name: true, leaderId: true, managerIds: true },
+    });
+    if (!dept) throw new NotFoundException('部门不存在');
+    const canManage = me.role === Role.ADMIN || isDeptAuthority(dept, me.id);
+    if (!canManage) {
+      const isMember = (await this.prisma.user.count({ where: { id: me.id, ...deptRosterWhere(id) } })) > 0;
+      if (!isMember) throw new ForbiddenException('仅可查看自己所在部门');
+    }
+    const entry = await this.deptEntry(dept);
+    // 全公司排行（看板页右侧固定一张，成员视角也可对比）
+    const allDepts = await this.prisma.department.findMany({ select: { id: true, name: true }, orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] });
+    const ranking = await Promise.all(
+      allDepts.map(async (d) => {
+        const roster = await this.prisma.user.findMany({ where: deptRosterWhere(d.id), select: { id: true } });
+        const hours = await this.prisma.report.aggregate({
+          where: { type: 'DAILY', ownerId: { in: roster.map((u) => u.id) }, periodStart: { gte: this.mondayLocal() } },
+          _sum: { hours: true },
+        });
+        return { id: d.id, name: d.name, memberCount: roster.length, weekHours: Math.round((hours._sum.hours ?? 0) * 10) / 10 };
+      }),
+    );
+    ranking.sort((a, b) => b.weekHours - a.weekHours);
+    return { dept: { id: entry.id, name: entry.name }, stats: entry.stats, completionRate: entry.completionRate, members: entry.members, ranking, month: this.currentMonth() };
+  }
+
   /**
    * 部门详情：基本信息 + 成员（备注 + 最近进展） + 部门在跑的项目（仅人工「主要关联」 + 成员名单）
    * 可见性：管理员/部门管理者（负责人 ∪ 共管人）看任意部门；普通成员看自己所在部门（主 ∪ 额外）

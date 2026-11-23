@@ -66,6 +66,18 @@ export class DepartmentsController {
     return this.departments.backfillReportsTo({ id: user.id, role: user.role });
   }
 
+  /** 成员任务总览：按部门手风琴分组的全员任务/完成度/本周工时/PBC（管理员看全部；负责人/共管人限本部门） */
+  @Get('task-overview')
+  taskOverview(@CurrentUser() user: CurrentUserPayload) {
+    return this.departments.taskOverview({ id: user.id, role: user.role });
+  }
+
+  /** 部门工作看板：单部门成员完成度/PBC/任务数据源 + 全公司部门工时排行（管理者任意部门；成员限本部门） */
+  @Get(':id/board')
+  deptBoard(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.departments.deptBoard(id, { id: user.id, role: user.role, departmentId: user.departmentId });
+  }
+
   /** 部门详情：基本信息 + 成员（含备注与最近进展） + 部门在跑的项目（含成员名单） */
   @Get(':id')
   detail(

@@ -187,9 +187,14 @@
         <TaskBoardPanel ref="boardRef" @open-task="openTask" />
       </el-tab-pane>
 
-      <!-- 我的日程：一天的工作行程（上班时间/会议/预约/我的安排/空余），信息与智能体「我的日程」打通 -->
+      <!-- 我的日程：一天的工作行程（会议/预约/外出/任务截止/我的安排/空余），信息与智能体「我的日程」打通 -->
       <el-tab-pane label="我的日程" name="myday" lazy>
         <MyScheduleTab />
+      </el-tab-pane>
+
+      <!-- 成员任务总览：按部门手风琴分组的全员任务/完成度/本周工时/PBC（管理员与部门负责人/共管人可见） -->
+      <el-tab-pane v-if="auth.isAdmin || auth.isDeptLeader" label="成员总览" name="overview" lazy>
+        <MemberTaskOverview @open-task="openTask" @open-member="(id: string) => router.push(`/members/${id}`)" />
       </el-tab-pane>
     </el-tabs>
 
@@ -210,6 +215,7 @@ import { useAuthStore } from '../stores/auth';
 import TaskFormDialog from '../components/TaskFormDialog.vue';
 import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
 import TaskBoardPanel from '../components/TaskBoardPanel.vue';
+import MemberTaskOverview from '../components/MemberTaskOverview.vue';
 import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
 import MyScheduleTab from '../components/MyScheduleTab.vue';
 
@@ -217,16 +223,19 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-/** 大 tab：任务列表 / 任务看板 / 我的日程；与地址栏 ?tab=board|myday 同步（首页等入口直达） */
-type TabKey = 'list' | 'board' | 'myday';
-const tab = ref<TabKey>(route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : 'list');
+/** 大 tab：任务列表 / 任务看板 / 我的日程 / 成员总览；与地址栏 ?tab=board|myday|overview 同步（首页等入口直达） */
+type TabKey = 'list' | 'board' | 'myday' | 'overview';
+const tab = ref<TabKey>(
+  route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : route.query.tab === 'overview' ? 'overview' : 'list',
+);
 const boardRef = ref<InstanceType<typeof TaskBoardPanel> | null>(null);
 
 function onTabChange(name: any) {
-  tab.value = name === 'board' ? 'board' : name === 'myday' ? 'myday' : 'list';
+  tab.value = name === 'board' ? 'board' : name === 'myday' ? 'myday' : name === 'overview' ? 'overview' : 'list';
   const q = { ...route.query };
   if (tab.value === 'board') q.tab = 'board';
   else if (tab.value === 'myday') q.tab = 'myday';
+  else if (tab.value === 'overview') q.tab = 'overview';
   else delete q.tab;
   router.replace({ query: q });
   // 从看板切回列表时重新拉一次，避免在看板里改过状态后列表是旧的
@@ -235,7 +244,7 @@ function onTabChange(name: any) {
 watch(
   () => route.query.tab,
   (v) => {
-    const t: TabKey = v === 'board' ? 'board' : v === 'myday' ? 'myday' : 'list';
+    const t: TabKey = v === 'board' ? 'board' : v === 'myday' ? 'myday' : v === 'overview' ? 'overview' : 'list';
     if (t !== tab.value) tab.value = t;
   },
 );
