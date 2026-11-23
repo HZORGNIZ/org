@@ -548,7 +548,7 @@ export class RetrospectivesService {
       }),
       this.prisma.projectDepartment.findMany({
         where: { departmentId: retro.departmentId },
-        include: { project: { select: { name: true, status: true, archived: true } } },
+        include: { project: { select: { id: true, name: true, status: true, archived: true } } },
       }),
     ]);
 
