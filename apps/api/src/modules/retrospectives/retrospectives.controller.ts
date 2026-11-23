@@ -23,6 +23,13 @@ export class RetrospectivesController {
     return this.retrospectives.list(userId);
   }
 
+  /** 部门复盘列表：可见部门的全部复盘（管理员全部 / 负责人·共管人·成员可见相关部门）
+   *  注意：必须声明在 @Get(':id') 之前，否则会被通配参数路由遮蔽 */
+  @Get('departments/retros')
+  deptList(@CurrentUser('id') userId: string) {
+    return this.retrospectives.deptList(userId);
+  }
+
   /** 复盘详情（含可提交成员列表与全部提交） */
   @Get(':id')
   getDetail(@Param('id') id: string, @CurrentUser('id') userId: string) {
@@ -80,12 +87,6 @@ export class RetrospectivesController {
   }
 
   // ======== 部门复盘（部门管理 · 复盘 tab）========
-
-  /** 部门复盘列表：可见部门的全部复盘（管理员全部 / 负责人·共管人·成员可见相关部门） */
-  @Get('departments/retros')
-  deptList(@CurrentUser('id') userId: string) {
-    return this.retrospectives.deptList(userId);
-  }
 
   /** 发起部门复盘（部门负责人/共管人/管理员）：period=YYYY-MM，同部门同周期不可重复 */
   @Post('departments/:departmentId/retros')
