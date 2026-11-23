@@ -48,11 +48,10 @@
       </div>
 
       <div class="agent-main">
-        <!-- 三模式切换：工作台 / 机器人（悬浮窗）/ 助理 Agent（/mobile）；内嵌页左侧多一个「首页」直达 -->
+        <!-- 内嵌页左上「首页」直达（原三档模式切换器已按收敛方案移除：悬浮窗/全屏是唯一对话入口） -->
         <div class="agent-mode-row">
           <button v-if="embedded" class="agent-home-btn" title="回到工作台首页" @click="router.push('/')">⌂ 首页</button>
           <span v-else></span>
-          <AssistantModeSwitch :current="mode === 'floating' ? 'robot' : 'agent'" compact @switch="onModeSwitch" />
         </div>
 
     <!-- 历史会话面板（服务端持久）：列表/切换/删除 -->
@@ -117,12 +116,12 @@
         <div class="agent-sched-tip">想加一条日程、问「我明天几点有空」、或开放某段时间给同事约会议，直接在下面说。</div>
       </div>
       <div v-if="!msgs.length" class="agent-empty">
-        <!-- 专属机器人：空会话先给开场白（人设来自后端注册表）；万能管家保留完整欢迎屏 -->
-        <div v-if="botKey !== 'general'" class="agent-bot-greet">
+        <!-- 专属机器人：空会话先给开场白（人设来自后端注册表）；我的助理保留完整欢迎屏 -->
+        <div v-if="botKey !== 'assistant'" class="agent-bot-greet">
           <div class="agent-bubble agent-bubble-agent">{{ curBot?.greeting }}</div>
           <div class="agent-bot-desc">{{ curBot?.desc }}</div>
         </div>
-        <!-- 首屏欢迎屏：问候 + 今日速览（4 格，来自 /agent/overview）+ 能力云；三入口共用同一组件 -->
+        <!-- 首屏欢迎屏：问候 + 今日速览（4 格，来自 /agent/overview）+ 进门卡片；三入口共用同一组件 -->
         <AgentWelcome
           v-else
           :name="overview?.name || auth.user?.name || ''"
@@ -131,6 +130,7 @@
           :loading="ovLoading"
           :disabled="sending"
           @fill="fillDraft"
+          @go="goCard"
         />
       </div>
       <div v-for="(m, i) in msgs" :key="i" class="agent-row" :class="'agent-row-' + m.role">
@@ -253,7 +253,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import AssistantModeSwitch from './AssistantModeSwitch.vue';
 import AgentWelcome from './AgentWelcome.vue';
 import AgentRobot from './AgentRobot.vue';
 import { ElMessage } from 'element-plus';
@@ -344,11 +343,11 @@ const QUICK_CHIPS: Record<'org' | 'project' | 'member', string[]> = {
   project: ['我项目进度怎么样？', '我项目下谁还没交日报？', '这周谁还没交周报？', '等会开个会，帮我发一下', '帮我写今天的日报'],
   member: ['我手里还有哪些待办？', '帮我写今天的日报', '我这周周报还没交吗？', '我今天有没有会要参加？'],
 };
-const quickChips = computed(() => (botKey.value !== 'general' ? BOT_CHIPS[botKey.value] ?? [] : QUICK_CHIPS[bucket.value]));
+const quickChips = computed(() => (botKey.value !== 'assistant' ? BOT_CHIPS[botKey.value] ?? [] : QUICK_CHIPS[bucket.value]));
 
 /** 头部副标题：按引导档三套（窄屏只显一行，超长省略，悬浮看全文）；专属机器人时改显机器人简介 */
 const hdSub = computed(() =>
-  botKey.value !== 'general'
+  botKey.value !== 'assistant'
     ? curBot.value?.desc ?? ''
     : bucket.value === 'member'
       ? '查我的进度与待办 · 写日报周报 · 找知识与 SOP'
@@ -360,27 +359,22 @@ const hdSub = computed(() =>
 // ---- 专属机器人：清单来自 /agent/config（后端注册表，按档位收敛）；会话按机器人分档案 ----
 interface BotMeta { key: string; name: string; short: string; desc: string; greeting: string; placeholder: string; scheduleOwner?: string | null }
 const FALLBACK_BOTS: BotMeta[] = [
-  { key: 'general', name: '万能管家', short: '万能', desc: '什么都能问的兜底大管家', greeting: '我是万能管家，查进度、写日报、发通知都可以找我。', placeholder: '问问万能管家…' },
+  { key: 'assistant', name: '我的助理', short: '助', desc: '一人一个的全能助理：写日报、查待办、管日程；管理者档带风险扫描与催办', greeting: '嗨，想进来做什么？直接说或点上面的卡片。', placeholder: '说需求，或点上面的卡片…' },
 ];
 const bots = ref<BotMeta[]>(FALLBACK_BOTS);
-const botKey = ref('general');
+const botKey = ref('assistant');
 const curBot = computed(() => bots.value.find((b) => b.key === botKey.value));
 
 /** 专属机器人各自的常驻快捷问 */
 const BOT_CHIPS: Record<string, string[]> = {
-  project: ['最近全站项目进展？', '最近有什么风险项目？', '这周谁还没交周报？', '项目里有哪些文档资料？'],
-  daily: ['帮我写今天的日报', '我的公司排名怎么样？', '帮我整理这周的周报', '改我的工作时间安排'],
-  meeting: ['我今天有没有会要参加？', '帮我把刚才的会整理成纪要', '项目成员最近在忙什么？'],
-  chase: ['今天谁还没交日报？帮我催一下', '这周谁还没交周报？催一下', '谁有逾期任务？发群催办', '有风险项目要提醒负责人吗？'],
-  notice: ['下午 3 点开个项目周会', '把通知发到公司群', '发布我的会议草稿'],
-  shushu: ['书书老师这周什么时候有空？', '帮我约书书老师周三下午聊 30 分钟，事由是项目进度沟通', '查我约书书老师的进度', '这周我（本人）的安排'],
-  yangli: ['杨力老师这周什么时候有空？', '帮我约杨老师明天上午聊 30 分钟', '查我约杨老师的进度', '这周我（本人）的安排'],
-  myday: ['今天和明天我有什么安排？', '我明天几点有空？', '帮我周三 15:00-16:00 记一条日程「写季度总结」', '周五上午 9-12 点开放给同事约会议'],
+  booking: ['舒舒老师这周什么时候有空？', '帮我约杨老师明天上午聊 30 分钟', '查我约老师的进度', '这周我（本人）的安排'],
+  'twin-shushu': ['最近我的项目进展怎么样？', '我该怎么提升技术能力？', '帮我整理一段想跟舒舒老师说的话'],
+  'twin-yangli': ['这个技术方案怎么选型？', '我的项目方向对不对？', '帮我整理一段想跟杨老师说的话'],
 };
 
 /** 每个机器人各记各的活动会话指针（万能管家沿用旧 key，老用户的接续不受影响） */
 function botIdKey() {
-  return botKey.value === 'general' ? activeIdKey() : `${activeIdKey()}:${botKey.value}`;
+  return botKey.value === 'assistant' ? activeIdKey() : `${activeIdKey()}:${botKey.value}`;
 }
 /** 上次选择的机器人：单独存一个 key，绝不能塞进「会话指针」槽位（否则会被当成会话 id 去查，必然 404） */
 const BOT_SELECT_KEY = 'myorgniz_agent_bot';
@@ -412,7 +406,9 @@ async function switchBot(key: string) {
   if (sid) {
     try {
       const s: any = await agentApi.getSession(sid);
-      if (s && (s.botType ?? 'general') === key) {
+      // 旧会话 botType 为 'general'/空：收敛后都归「我的助理」
+      const bt = !s?.botType || s.botType === 'general' ? 'assistant' : s.botType;
+      if (s && bt === key) {
         msgs.value = Array.isArray(s.messages) ? (s.messages as AgentMsg[]) : [];
         sessionId.value = sid;
         scrollBottom();
@@ -490,10 +486,6 @@ const open = ref(embeddedLike.value);
 function goFullscreen() {
   open.value = false;
   router.push('/mobile');
-}
-/** 模式切换副作用：切到工作台时把悬浮窗收起来（其余跳转由切换器自己完成） */
-function onModeSwitch(mode: 'workspace' | 'robot' | 'agent') {
-  if (mode === 'workspace') open.value = false;
 }
 const sending = ref(false);
 const draft = ref('');
@@ -797,6 +789,13 @@ async function send(preset?: string) {
   msgs.value.push({ role: 'user', text });
   saveHistory();
   await runAgent();
+}
+
+/** 进门卡片直达：先切到卡片指定的机器人（无 text 的纯切换，如分身选人），有预设问题时立即发出 */
+async function goCard(card: { bot?: string; text?: string }) {
+  if (sending.value) return;
+  if (card.bot && card.bot !== botKey.value) await switchBot(card.bot);
+  if (card.text) await send(card.text);
 }
 
 async function runAgent() {

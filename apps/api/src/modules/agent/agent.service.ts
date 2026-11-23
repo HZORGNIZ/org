@@ -110,142 +110,87 @@ export interface AgentBotDef {
 const READ_ONLY_SET = new Set<string>();
 
 export const AGENT_BOTS: AgentBotDef[] = [
+  // ---- 我的助理：成员唯一日常助手（写日报/查待办/管日程）；tools/actions 为 null=沿用档位白名单，
+  //      管理者档自动获得催办/风险/通知等全部能力（不再单设催办/通知机器人） ----
   {
-    key: 'general',
-    name: '万能管家',
-    short: '万能',
-    desc: '什么都能问的兜底大管家：查进度/风险/待办、写日报周报、发起会议、发通知都能做',
-    greeting: '我是万能管家，查进度、写日报、发通知都可以找我；想聊得更专，可以切上面的专属机器人。',
-    placeholder: '问问万能管家…',
+    key: 'assistant',
+    name: '我的助理',
+    short: '助',
+    desc: '一人一个的全能助理：智能写日报周报、查我的任务待办、管我的日程与可约时间；管理者档还带项目风险扫描、催日报周报、会议通知',
+    greeting: '嗨，想进来做什么？写日报、查任务、约老师时间、扫项目风险，直接说或点上面的卡片。',
+    placeholder: '说需求，或点上面的卡片…',
     prompt: 'manager.agent',
     tools: null,
     actions: null,
   },
+  // ---- 约时间：合并版（原约书书老师/约杨老师二合一）。进门先问约谁；
+  //      ownerName 由 chat() 从对话里动态识别（detectBookingOwner）或老师本人自动绑定，见 botRun 拷贝逻辑 ----
   {
-    key: 'project',
-    name: '项目管家',
-    short: '问',
-    desc: '专答项目咨询：进度、风险、任务、周报、成员日报、项目文档知识库——只查不改',
-    greeting: '我是项目管家，只负责查与答：项目进度、风险、任务、周报、文档资料都能问；下发任务/改状态请找万能管家。',
-    placeholder: '问问项目进度/风险/资料…',
-    prompt: 'manager.bot.project',
-    tools: new Set([
-      'list_projects',
-      'project_progress',
-      'project_risks',
-      'project_tasks',
-      'project_weekly',
-      'weekly_status',
-      'daily_status',
-      'overdue_tasks',
-      'list_meetings',
-      'team_ranking',
-      'my_ranking',
-      'project_files',
-      'read_project_doc',
-      'project_reports',
-      'search_knowledge',
-      'search_sop',
-      'my_tasks',
-      'my_today',
-      'my_work_schedule',
-    ]),
+    key: 'booking',
+    name: '约时间',
+    short: '约',
+    desc: '约舒舒老师或杨力老师的时间：先问约谁，再查 TA 的开放可约时段、发预约（老师钉钉确认）；老师本人可登记可约时间、审批预约',
+    greeting:
+      '想约舒舒老师还是杨力老师？告诉我约谁、大概日期时长和事由，我先查 TA 的开放可约时段再帮你发预约（老师会在钉钉收到确认请求）。\n老师本人也可以直接说「周三下午 2 点后有空」，我帮你记进可约时间；有人约你时我会先向你汇报。',
+    placeholder: '约舒舒老师/杨老师：日期+时长+事由…',
+    ownerName: undefined,
+    prompt: 'manager.bot.schedule',
+    tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
+    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
+  },
+  // ---- 老师分身：以老师人设陪聊任何事；只读不执行动作（actions=空集），拿不准的事引导留言/预约本人 ----
+  {
+    key: 'twin-shushu',
+    name: '舒舒老师分身',
+    short: '舒',
+    desc: '舒舒老师的 AI 分身：项目、工作、成长什么都可以聊；需要她本人拍板的事，会帮你留言或引导你预约她的时间',
+    greeting: '我是舒舒老师的分身，什么事都可以跟我聊；需要舒舒老师本人拍板的事，我会帮你留言，或帮你预约她的时间。',
+    placeholder: '和舒舒老师聊聊…',
+    prompt: 'manager.bot.twin.shushu',
+    tools: null,
     actions: READ_ONLY_SET,
   },
   {
-    key: 'daily',
-    name: '日报助手',
-    short: '报',
-    desc: '专帮写日报周报：读今日素材按三段式整理、口述提交、顺手管自己的工作时间安排',
-    greeting: '我是日报助手，专帮写日报/周报：把今天做的事口述给我，我核实后按三段式整理好给你确认提交。',
-    placeholder: '说说今天做了什么，帮你写日报…',
-    prompt: 'manager.bot.daily',
-    tools: new Set(['my_today', 'my_tasks', 'my_work_schedule', 'my_ranking']),
-    actions: new Set(['DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET']),
-  },
-  {
-    key: 'meeting',
-    name: '会议纪要',
-    short: '纪',
-    desc: '专整理会议纪要：查会议、读项目资料、把纪要按要点整理成文',
-    greeting: '我是会议纪要助手：把会议内容/录音转写口述给我，我整理成结构化纪要；也能查你参与的会议与项目资料。',
-    placeholder: '把会议内容说给我，帮你整理纪要…',
-    prompt: 'manager.bot.meeting',
-    tools: new Set(['list_meetings', 'project_files', 'read_project_doc', 'project_reports', 'search_knowledge', 'search_sop', 'my_tasks', 'my_today']),
-    actions: new Set(['MEETING_NOTIFY']),
-  },
-  {
-    key: 'chase',
-    name: '催办小秘书',
-    short: '催',
-    desc: '专催办事：催日报、催周报、催逾期任务、提醒风险项目——先查真实名单再催，绝不空口点名',
-    greeting: '我是催办小秘书：催日报、催周报、催逾期任务都行；我会先查真实名单再出催办计划，你确认后才发送。',
-    placeholder: '要催什么？我先查名单再催…',
-    managersOnly: true,
-    prompt: 'manager.bot.chase',
-    tools: new Set(['daily_status', 'weekly_status', 'overdue_tasks', 'project_tasks', 'list_projects', 'group_options', 'team_ranking', 'list_meetings']),
-    actions: new Set(['DAILY_CHASE', 'WEEKLY_CHASE', 'OVERDUE_CHASE', 'RISK_ALERT']),
-  },
-  {
-    key: 'notice',
-    name: '会议通知',
-    short: '知',
-    desc: '专管会议与通知：发起/发布会议、补发会议通知、把通知发到群或个人',
-    greeting: '我是会议通知助手：帮你发起会议、发布邀请、补发通知，或把通知发到钉钉群/个人（发送前都会给你确认）。',
-    placeholder: '要开什么会/发什么通知…',
-    managersOnly: true,
-    prompt: 'manager.bot.notice',
-    tools: new Set(['list_meetings', 'group_options', 'list_projects', 'search_knowledge', 'search_sop']),
-    actions: new Set(['MEETING_CREATE', 'MEETING_PUBLISH', 'MEETING_NOTIFY', 'NOTIFY_BROADCAST']),
-  },
-  // ---- 约时间机器人：一人一个，绑定老师账号；成员查空档+发起预约，老师本人登记空闲/审批预约 ----
-  {
-    key: 'shushu',
-    name: '约书书老师',
-    short: '书',
-    desc: '专约书书老师的时间：先查她哪段空着再发预约；书书老师本人可登记临时空闲、看自己的安排，冲突时由助手代为回复成员',
-    greeting:
-      '我是书书老师的约时间助理。想找书书老师沟通：告诉我大概日期、时长和事由，我先查她的空档再帮你发预约。\n书书老师本人也可以直接说「周三下午 2 点后有空」，我帮你记进可约时间；有人约你时我会先向你汇报，时间冲突可以让我直接回复对方。',
-    placeholder: '想约书书老师？说说日期时长和事由…',
-    ownerName: '书书',
-    prompt: 'manager.bot.schedule',
-    tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
-    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
-  },
-  {
-    key: 'yangli',
-    name: '约杨老师',
+    key: 'twin-yangli',
+    name: '杨老师分身',
     short: '杨',
-    desc: '专约杨力老师的时间：先查他哪段空着再发预约；杨力老师本人可登记临时空闲、看自己的安排',
-    greeting:
-      '我是「约杨老师」小助手。想找杨力老师沟通：告诉我大概日期、时长和事由，我先查他的空档再帮你发预约。\n杨力老师本人也可以直接说「周四上午有空」，我帮你记进可约时间。',
-    placeholder: '想约杨力老师？说说日期时长和事由…',
-    ownerName: '杨力',
-    prompt: 'manager.bot.schedule',
-    tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
-    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
-  },
-  // ---- 我的日程：每个人的日程小助理，开场主动汇报今天/明天的完整时间轴，可对话记日程/查空余/设可约时段 ----
-  {
-    key: 'myday',
-    name: '我的日程',
-    short: '程',
-    desc: '你的个人日程小助理：一进来就汇报今天和明天的安排（会议/预约/上班时间/空余），帮你记日程、设可约时间、提醒冲突',
-    greeting:
-      '我是你的日程小助理。你的今天和明天安排我马上汇报给你；想加一条日程、问「我明天几点有空」、或把某个时段开放给别人约会议，直接说就行。',
-    placeholder: '问我日程/空余，或说「周三15点到16点写总结」…',
-    prompt: 'manager.bot.myday',
-    tools: new Set(['my_schedule', 'my_tasks', 'my_today', 'my_work_schedule', 'my_ranking']),
-    actions: new Set(['EVENT_CREATE', 'EVENT_DELETE']),
+    desc: '杨力老师的 AI 分身：技术方案、项目方向、资源协调都能聊；需要他本人决定的事，会帮你留言或引导你预约他的时间',
+    greeting: '我是杨力老师的分身，什么事都可以跟我聊；需要杨老师本人拍板的事，我会帮你留言，或帮你预约他的时间。',
+    placeholder: '和杨老师聊聊…',
+    prompt: 'manager.bot.twin.yangli',
+    tools: null,
+    actions: READ_ONLY_SET,
   },
 ];
 
 const BOT_KEYS = new Set(AGENT_BOTS.map((b) => b.key));
 
-/** 校验机器人 key：非法/为空一律回落万能管家（旧前端不传 bot 也照常工作） */
+/** 旧版机器人 key → 新 key 映射（收敛 9→4 后历史会话/旧前端照常工作） */
+const LEGACY_BOT_MAP: Record<string, string> = {
+  general: 'assistant',
+  project: 'assistant',
+  daily: 'assistant',
+  meeting: 'assistant',
+  chase: 'assistant',
+  notice: 'assistant',
+  myday: 'assistant',
+  shushu: 'booking',
+  yangli: 'booking',
+};
+
+/** 校验机器人 key：非法/为空回落「我的助理」；旧版 key 走映射（历史会话无缝迁移） */
 function normBotKey(raw: unknown): string {
   const k = String(raw ?? '').trim();
-  return BOT_KEYS.has(k) ? k : 'general';
+  if (BOT_KEYS.has(k)) return k;
+  return LEGACY_BOT_MAP[k] ?? 'assistant';
+}
+
+/** 合并版约时间：从对话文本里识别要约哪位老师（舒舒/书书→书书；杨力/杨老师/杨丽→杨力） */
+function detectBookingOwner(text: string): string | null {
+  const t = String(text ?? '');
+  if (/书书|舒舒|shushu/i.test(t)) return '书书';
+  if (/杨力|杨老师|杨丽|yangli/i.test(t)) return '杨力';
+  return null;
 }
 
 /** 当前档位可见的机器人清单（config 返回给前端渲染头像栏）；scheduleOwner=约时间机器人绑定的老师名 */
@@ -446,6 +391,15 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('请以一条用户消息结束对话');
     }
 
+    // 合并版约时间：从本次消息与历史里识别要约哪位老师；老师本人没提名字时自动绑定自己（用 bot 管自己的可约时间/审批预约）
+    let botRun = bot;
+    if (bot.key === 'booking') {
+      const ownerTarget =
+        detectBookingOwner(flat.map((m) => m.content).join('\n')) ??
+        (/(书书|舒舒)/.test(me.name) ? '书书' : /(杨力|杨老师|杨丽)/.test(me.name) ? '杨力' : null);
+      if (ownerTarget) botRun = { ...bot, ownerName: ownerTarget };
+    }
+
     const scope: any = await this.buildScope(me, tier);
     // 项目 AI 员工：当前页面带项目 id 时校验可见性并挂到 scope，供档案注入与项目工具缺省定位
     if (body.pageContext?.projectId) {
@@ -487,13 +441,11 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
           : '（当前未解析到公司群，只能发项目群）'
       }；我的未发布/待召开会议=${JSON.stringify(scope.meetings)}`,
       // 专属机器人：能力边界写进上下文，模型不越界承诺；工具/动作白名单另在 runTool/buildAction 硬拦截
-      bot.key !== 'general'
-        ? `【当前专属机器人】${bot.name}（${bot.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切换「万能管家」，绝不承诺自己做不到的事。`
+      bot.key !== 'assistant'
+        ? `【当前专属机器人】${bot.name}（${bot.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切回「我的助理」，绝不承诺自己做不到的事。`
         : '',
-      // 约时间机器人：被约老师是谁、当前说话的人是不是本人（决定「能登记空闲/审批」还是「只能查空档+发预约」）
-      bot.ownerName ? await this.buildScheduleBotContext(me, bot) : '',
-      // 我的日程机器人：注入今天+明天的完整日程快照，开场第一句主动汇报
-      bot.key === 'myday' ? await this.buildMydayBotContext(me) : '',
+      // 约时间机器人（合并版）：botRun 带动态识别的被约老师；没识别到时上下文会指导模型先问约谁
+      bot.key === 'booking' ? await this.buildScheduleBotContext(me, botRun) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -524,7 +476,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         const key = this.traceKey({ tool: toolName, args });
         let result = resultCache.get(key);
         if (!result) {
-          const raw = await this.runTool(me, scope, toolName, args, tier, bot);
+          const raw = await this.runTool(me, scope, toolName, args, tier, botRun);
           const ro = raw && typeof raw === 'object' && !Array.isArray(raw) ? ({ ...(raw as any) } as any) : { data: raw };
           if (Array.isArray(ro.links)) {
             for (const l of ro.links) {
@@ -543,7 +495,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       }
 
       const reply = String(out.reply ?? '').trim() || '（模型未给出答复，请补充更多信息后重试）';
-      const action = out.action ? await this.buildAction(me, scope, out.action, tier, bot) : null;
+      const action = out.action ? await this.buildAction(me, scope, out.action, tier, botRun) : null;
       if (out.action && !action) {
         // 动作参数解析失败：降级为文字提示，让模型下一轮向用户追问
         return { reply: `${reply}\n\n（我尝试生成的操作计划信息不完整或无权限，已暂停，请补充或修正后重试）`, action: null, toolTrace, links };
@@ -1765,7 +1717,11 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
   private async buildScheduleBotContext(me: CurrentUserPayload, bot: AgentBotDef): Promise<string> {
     const owner = await this.resolveBotOwner(bot);
     if (!owner) {
-      return `【约时间机器人】被约人「${bot.ownerName ?? ''}」账号未找到或已停用：你无法查空档、也收不了预约，请如实告知用户联系管理员绑定账号，绝不编造时间。`;
+      // 合并版还没识别出约谁：不下场查数据，先让模型把「约谁」问清楚
+      if (!bot.ownerName) {
+        return `【约时间机器人】这是合并版约时间助手（可约：书书老师 / 杨力老师）。当前还不知道用户要约谁：先问清楚「约书书老师还是杨力老师」（一句话问完，别啰嗦）；用户确认前不要调用 owner_availability / owner_agenda / owner_bookings，也不要发起 BOOKING_CREATE。`;
+      }
+      return `【约时间机器人】被约人「${bot.ownerName}」账号未找到或已停用：你无法查空档、也收不了预约，请如实告知用户联系管理员绑定账号，绝不编造时间。`;
     }
     const isOwner = owner.id === me.id;
     if (!isOwner) {
@@ -1797,7 +1753,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
 
   private async toolOwnerAvailability(bot: AgentBotDef | undefined, args: any) {
     const owner = await this.resolveBotOwner(bot);
-    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    if (!owner) return { error: bot?.ownerName ? `被约人「${bot.ownerName}」账号未绑定或已停用，请管理员检查` : '还没确认要约哪位老师：请先问用户约书书老师还是杨力老师，确认后再查' };
     const { from, to } = this.parseScheduleRange(args);
     const data = await this.computeAvailability(owner.id, from, to);
     return {
@@ -1811,7 +1767,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
 
   private async toolOwnerAgenda(me: CurrentUserPayload, bot: AgentBotDef | undefined, args: any) {
     const owner = await this.resolveBotOwner(bot);
-    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    if (!owner) return { error: bot?.ownerName ? `被约人「${bot.ownerName}」账号未绑定或已停用，请管理员检查` : '还没确认要约哪位老师：请先问用户约书书老师还是杨力老师，确认后再查' };
     const { from, to } = this.parseScheduleRange(args);
     const rangeEnd = this.addDays(to, 1);
     const isOwner = owner.id === me.id;
@@ -1849,7 +1805,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
 
   private async toolOwnerBookings(me: CurrentUserPayload, bot: AgentBotDef | undefined, args: any) {
     const owner = await this.resolveBotOwner(bot);
-    if (!owner) return { error: `被约人「${bot?.ownerName ?? ''}」账号未绑定或已停用，请管理员检查` };
+    if (!owner) return { error: bot?.ownerName ? `被约人「${bot.ownerName}」账号未绑定或已停用，请管理员检查` : '还没确认要约哪位老师：请先问用户约书书老师还是杨力老师，确认后再查' };
     const isOwner = owner.id === me.id;
     const status = String(args?.status ?? '').toUpperCase();
     const statusFilter = ['PENDING', 'CONFIRMED', 'REJECTED', 'CANCELLED'].includes(status) ? [status] : isOwner ? ['PENDING', 'CONFIRMED'] : undefined;
@@ -2247,26 +2203,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       days,
       hint: 'busy 为会议/预约/我的安排；free 为空余时段（openForBooking=已开放给同事约会议）；回答请按天用人话复述，不要输出 JSON',
     };
-  }
-
-  /** myday 机器人上下文：开场就注入今天+明天的完整日程快照，让小助理第一句话就能主动汇报 */
-  private async buildMydayBotContext(me: CurrentUserPayload): Promise<string> {
-    const fmtDay = (t: any) => {
-      const lines = t.items.filter((x: any) => x.type !== 'WORK' || true).map((x: any) => {
-        if (x.type === 'WORK') return `${x.time} 上班`;
-        return `${x.time} ${x.label}${x.statusCn ? `（${x.statusCn}）` : ''}`;
-      });
-      const free = t.free.map((x: any) => `${x.time}${x.openForBooking ? '（已开放可约）' : ''}`);
-      return `${t.date}（${t.weekday}）：${lines.length ? lines.join('；') : '无安排'}${free.length ? `。空余：${free.join('、')}` : '。全天已排满'}`;
-    };
-    const today = this.bjDayStart();
-    const [t1, t2] = await Promise.all([this.buildDayTimeline(me.id, today), this.buildDayTimeline(me.id, this.addDays(today, 1))]);
-    return [
-      `【我的日程快照（自动生成，开场第一句就要向用户汇报这两天的安排）】`,
-      `今天 ${fmtDay(t1)}`,
-      `明天 ${fmtDay(t2)}`,
-      `可用工具：my_schedule 查更远的日程（args.date/dateTo）；EVENT_CREATE 记日程（kind=EVENT）/开放可约（kind=FREE）/登记占用（kind=BUSY）；EVENT_DELETE 删除。加日程若与已有安排撞车，系统会在确认卡里给出冲突提示，要如实转告用户。`,
-    ].join('\n');
   }
 
   /** 该老师某时段是否已有会议/预约（冲突检测） */

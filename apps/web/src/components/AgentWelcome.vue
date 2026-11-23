@@ -5,7 +5,7 @@
       <span class="aw-avatar"><AgentRobot :size="42" /></span>
       <div class="aw-hd-txt">
         <div class="aw-greet">{{ greetWord }}，{{ name || '你好' }}</div>
-        <div class="aw-sub">我是项目助理小助手，下面这些都能帮你做 👇</div>
+        <div class="aw-sub">嗨，想进来做什么？点下面的卡片直达，或直接打字。</div>
       </div>
       <span class="aw-badge" :class="'aw-badge-' + bucket">{{ roleLabel }}</span>
     </div>
@@ -37,20 +37,40 @@
     </div>
     <div v-else-if="!loading" class="aw-grid-off">今日速览暂时没取到，你可以直接问我 ↓</div>
 
-    <!-- 3. 能力云：分组胶囊，按三档差异化；点一条填进输入框，改完再发 -->
-    <div class="aw-cap-hd">我能帮你做这些 · 点一条填进输入框，改完再发</div>
-    <div v-for="g in capGroups" :key="g.title" class="aw-cap-group">
-      <div class="aw-cap-title">{{ g.title }}</div>
-      <div class="aw-cap-items">
-        <button
-          v-for="q in g.items"
-          :key="q"
-          class="aw-chip"
-          :disabled="disabled"
-          title="点击填入输入框，可补充或修改后再发送"
-          @click="$emit('fill', q)"
-        >{{ q }}</button>
-      </div>
+    <!-- 3. 进门卡片（收敛方案 v1）：按角色给 4 张卡，点了直达对应智能体并自动发出预设问题 -->
+    <div class="aw-cards">
+      <button
+        v-for="c in cards"
+        :key="c.title"
+        class="aw-card"
+        :class="{ 'aw-card-split': c.split }"
+        :disabled="disabled"
+        @click="onCard(c)"
+      >
+        <span class="aw-card-t">{{ c.title }}</span>
+        <span class="aw-card-d">{{ c.desc }}</span>
+        <span v-if="c.split" class="aw-card-opts">
+          <span
+            v-for="o in c.opts"
+            :key="o.bot"
+            class="aw-card-opt"
+            @click.stop="onCard(o)"
+          >{{ o.label }}</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- 4. 常用快捷问：点一条填进输入框，改完再发 -->
+    <div class="aw-cap-hd">常用 · 点一条填进输入框，改完再发</div>
+    <div class="aw-cap-items">
+      <button
+        v-for="q in quickList"
+        :key="q"
+        class="aw-chip"
+        :disabled="disabled"
+        title="点击填入输入框，可补充或修改后再发送"
+        @click="$emit('fill', q)"
+      >{{ q }}</button>
     </div>
   </div>
 </template>
@@ -75,9 +95,54 @@ const props = withDefaults(
   }>(),
   { name: '', bucket: 'member', overview: null, loading: false, disabled: false },
 );
-defineEmits<{ (e: 'fill', text: string): void }>();
+const emit = defineEmits<{ (e: 'fill', text: string): void; (e: 'go', card: { bot?: string; text?: string }): void }>();
 
 const ov = computed(() => props.overview ?? null);
+
+/** 进门卡片：成员 4 张 / 管理者（org/project 档）4 张；split 卡内含子选项（分身选人） */
+interface WelcomeCard { title: string; desc: string; bot?: string; text?: string; split?: boolean; opts?: { label: string; bot: string; text?: string }[] }
+const CARDS: Record<'org' | 'project' | 'member', WelcomeCard[]> = {
+  member: [
+    {
+      title: '跟老师聊',
+      desc: '舒舒老师 / 杨老师分身，什么事都能聊',
+      split: true,
+      opts: [
+        { label: '舒舒老师分身', bot: 'twin-shushu' },
+        { label: '杨老师分身', bot: 'twin-yangli' },
+      ],
+    },
+    { title: '写我的日报', desc: 'AI 拉取今天的进展自动成稿，我确认后提交', bot: 'assistant', text: '帮我写今天的日报' },
+    { title: '没处理的任务', desc: '待办清单 + 逾期提醒 + 建议顺序', bot: 'assistant', text: '列出我还没处理的任务和逾期项' },
+    { title: '我的会 · 约时间', desc: '查我的日程；约舒舒老师 / 杨老师的时间', bot: 'booking', text: '我想约老师的时间' },
+  ],
+  project: [
+    { title: '项目风险扫描', desc: '延期项目 · 逾期任务 · 连续无日报', bot: 'assistant', text: '扫一下当前项目风险：延期项目、逾期任务、连续没交日报的项目' },
+    { title: '催一下日报', desc: '列出未交名单，我确认后发群催办', bot: 'assistant', text: '查一下今天谁还没交日报，列个名单，我确认后发群催办' },
+    { title: '待我确认', desc: '项目审批 · PBC · 别人约我的时间', bot: 'assistant', text: '列出现在需要我确认的事项：项目审批、PBC 计划与考核、别人约我的时间' },
+    { title: '我的开放时间与预约', desc: '维护可约时段 · 确认/拒绝预约', bot: 'booking', text: '查看我的待确认预约和可约时间' },
+  ],
+  org: [
+    { title: '项目风险扫描', desc: '全站延期项目 · 逾期任务 · 无日报', bot: 'assistant', text: '扫一下全站项目风险：延期项目、逾期任务、连续没交日报的项目' },
+    { title: '催一下日报', desc: '全站未交名单，我确认后发群催办', bot: 'assistant', text: '查一下今天全站谁还没交日报，列个名单，我确认后发群催办' },
+    { title: '待我确认', desc: '项目审批 · PBC · 别人约我的时间', bot: 'assistant', text: '列出现在需要我确认的事项：项目审批、PBC 计划与考核、别人约我的时间' },
+    { title: '我的开放时间与预约', desc: '维护可约时段 · 确认/拒绝预约', bot: 'booking', text: '查看我的待确认预约和可约时间' },
+  ],
+};
+const cards = computed(() => CARDS[props.bucket] ?? CARDS.member);
+
+/** 常用快捷问：每档 6 条以内，不再分组成堆 */
+const QUICK: Record<'org' | 'project' | 'member', string[]> = {
+  member: ['我这周周报还没交吗？', '我今天有没有会要参加？', '我现在的工作时间是怎么排的？', '知识库里有没有部署流程的文档？', '我的公司排名怎么样？'],
+  project: ['我项目现在进度怎么样？', '我项目下谁的任务逾期了？', '明天 15:00 开个项目周会，参会：张三、李四', '这周谁还没交周报？', '知识库里有没有部署流程的文档？'],
+  org: ['全站项目的进度怎么样？', '这周谁还没交周报？', '把这条通知发到公司群：今天下午 6 点例会', '全站工时排名谁第一？', '新人入职的标准 SOP 是什么？'],
+};
+const quickList = computed(() => QUICK[props.bucket] ?? QUICK.member);
+
+function onCard(c: { bot?: string; text?: string }) {
+  if (props.disabled) return;
+  emit('go', { bot: c.bot, text: c.text });
+}
 
 // 时段问候：按北京墙钟（与服务端日期戳同一口径），不依赖容器时区
 const greetWord = computed(() => {
@@ -123,36 +188,6 @@ const rankSub = computed(() => {
   return `共 ${r.hoursTotal || 0} 人参与 · 我本月日报 ${r.myReportCount ?? 0} 篇`;
 });
 
-/** 能力云分组：按三档（员工 / 项目负责人 = 员工 + 团队视角 / 管理员 = 项目负责人 + 全站视角），每条都是真能发出的一句话 */
-const CAP_GROUPS: Record<'org' | 'project' | 'member', { title: string; items: string[] }[]> = {
-  member: [
-    { title: '写日报 / 周报', items: ['帮我写今天的日报', '提交我本周的周报', '我这周周报还没交吗？'] },
-    { title: '我的待办', items: ['我手里还有哪些待办？', '我今天该做什么？', '我有任务逾期了吗？'] },
-    { title: '我的排名', items: ['我的公司排名怎么样？', '我这个月写了几篇日报？', '我工时排第几？'] },
-    { title: '我的工作时间', items: ['我现在的工作时间是怎么排的？', '帮我把周一到周五设成 9:30-19:00', '我周六要写日报吗？'] },
-    { title: '我的会议', items: ['我今天有没有会要参加？', '我这周有哪些会议？'] },
-    { title: '找沉淀', items: ['知识库里有没有写过部署流程？', '这个事的标准做法（SOP）是什么？'] },
-  ],
-  project: [
-    { title: '我的项目', items: ['我项目现在进度怎么样？', '我项目最近有什么风险？', '我项目下谁的任务逾期了？'] },
-    { title: '团队交报与排行', items: ['我项目下今天还有谁没交日报？', '我们项目谁工时最多？', '这周谁还没交周报？'] },
-    { title: '开会', items: ['明天 15:00 开个项目周会，参会：张三、李四', '把我那个未发布的草稿会议发布出去'] },
-    { title: '催办', items: ['催大家写今天的日报', '把没交周报的催一下', '把逾期任务催一下，发到项目群'] },
-    { title: '组员任务', items: ['帮我把张三的“测试报告”标成已完成', '把李四那个任务的截止推到下周五'] },
-    { title: '我自己的', items: ['帮我写今天的日报', '我的公司排名怎么样？', '帮我设置我的工作/培训时间'] },
-    { title: '找沉淀', items: ['知识库里有没有写过部署流程？', '这个事的标准做法（SOP）是什么？'] },
-  ],
-  org: [
-    { title: '全站情况', items: ['全站项目的进度怎么样？', '最近有什么风险？', '全站工时排名谁第一？', '这周谁还没交周报？'] },
-    { title: '预警提醒', items: ['把风险项目提醒对应负责人', '需关注的项目也提一提'] },
-    { title: '统一通知', items: ['把这条通知发到公司群：今天下午 6 点例会', '给张三、李四发个提醒'] },
-    { title: '派活与催办', items: ['给张三加一条任务：11-06 前交测试报告', '催大家写今天的日报', '把逾期任务催一下，发到项目群'] },
-    { title: '开会', items: ['明天 15:00 开个项目周会，参会：张三、李四', '把我那个未发布的草稿会议发布出去'] },
-    { title: '我自己的', items: ['帮我写今天的日报', '我的公司排名怎么样？', '帮我设置我的工作/培训时间'] },
-    { title: '找沉淀', items: ['知识库里有没有写过部署流程？', '新人入职的标准 SOP 是什么？'] },
-  ],
-};
-const capGroups = computed(() => CAP_GROUPS[props.bucket] ?? CAP_GROUPS.member);
 
 // 问候行小机器人图标已换成 AgentRobot 形象组件（与悬浮球/面板头同一套 SVG）
 </script>
@@ -250,6 +285,62 @@ const capGroups = computed(() => CAP_GROUPS[props.bucket] ?? CAP_GROUPS.member);
   text-overflow: ellipsis;
 }
 .aw-warn { color: #f56c6c; }
+
+/* 进门卡片：2×2 网格，标题 + 一句话说明；split 卡内含分身选人子按钮 */
+.aw-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.aw-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #e2ebf8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 0;
+}
+.aw-card:hover:not(:disabled) {
+  border-color: #bcd6fb;
+  background: #f2f8ff;
+}
+.aw-card:disabled { opacity: 0.6; cursor: not-allowed; }
+.aw-card-t {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f5fd0;
+}
+.aw-card-d {
+  font-size: 11px;
+  color: #8a94a6;
+  line-height: 1.4;
+}
+.aw-card-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+.aw-card-opt {
+  font-size: 11px;
+  color: #3a4a63;
+  background: #f2f6fd;
+  border: 1px solid #e2ebf8;
+  border-radius: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.aw-card-opt:hover {
+  background: #e7f0fd;
+  border-color: #bcd6fb;
+  color: #1f5fd0;
+}
 
 .aw-cap-hd {
   font-size: 13px;
