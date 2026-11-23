@@ -213,6 +213,7 @@ export class DepartmentsService {
       if (row) row.prevWeekHours = Math.round((h._sum.hours ?? 0) * 10) / 10;
     }
     for (const r of todayReports) {
+      if (!r.ownerId) continue; // ownerId 可空（类型收窄）
       const row = rows.get(r.ownerId);
       if (row) row.dailySubmitted = true;
     }
