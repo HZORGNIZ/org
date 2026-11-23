@@ -52,18 +52,48 @@
         <span class="prv-go"><el-button text type="primary" size="small">去评分 →</el-button></span>
       </div>
     </div>
+    <!-- 预约确认：成员约老师的时间，待老师确认（确认后自动生成会议并占日程；行内直接同意/驳回） -->
+    <div class="prv-sec">
+      <div class="prv-sec-head">
+        <span class="prv-sec-title">预约确认</span>
+        <el-tag size="small" :type="bookings.length ? 'danger' : 'info'" effect="plain">{{ bookings.length }} 条</el-tag>
+      </div>
+      <div v-if="!bookings.length" class="muted prv-empty">暂无待确认的沟通预约</div>
+      <div v-for="b in bookings" :key="'bk-' + b.id" class="prv-row">
+        <el-tag size="small" type="warning" effect="plain">预约</el-tag>
+        <span class="prv-main ellipsis">{{ b.who }} 想约你：{{ b.title || '未填事由' }}</span>
+        <span class="muted prv-meta">{{ (b.start || '').slice(5, 16) }}-{{ (b.end || '').slice(11, 16) }} · 等待确认</span>
+        <span class="prv-go">
+          <el-button text type="primary" size="small" @click="decideBooking(b, true)">同意</el-button>
+          <el-button text type="danger" size="small" @click="decideBooking(b, false)">驳回</el-button>
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ElMessage } from 'element-plus';
+import { agentApi } from '../api';
 import { usePendingReview } from '../utils/usePendingReview';
 import { fmt } from '../utils/format';
 
 /** 点行跳转：project → 项目详情；pbc-plan / pbc-review → 工作管理 PBC 区（父级决定站内切换还是路由跳转） */
 const emit = defineEmits<{ (e: 'jump', payload: { kind: 'project' | 'pbc-plan' | 'pbc-review'; id?: string }): void }>();
 
-const { projects, pbcPlans, pbcScores, loading, total, load } = usePendingReview();
+const { projects, pbcPlans, pbcScores, bookings, loading, total, load } = usePendingReview();
 load();
+
+/** 预约行内确认/驳回：与首页待办、AI 助手 BOOKING_DECIDE 同一接口；确认后自动生成会议 */
+async function decideBooking(b: any, approve: boolean) {
+  try {
+    await agentApi.decideBooking(b.id, { approve });
+    ElMessage.success(approve ? '已确认，会议已生成并加入你的日程' : '已驳回，该时段已空出');
+    load();
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? e?.message ?? '操作失败');
+  }
+}
 </script>
 
 <style scoped>

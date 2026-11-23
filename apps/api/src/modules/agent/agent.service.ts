@@ -4135,6 +4135,27 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     const isProjectTalk = /项目|project/i.test(`${title} ${note ?? ''}`);
     const materialTip = isProjectTalk ? '请提前准备好项目材料（进展、问题、数据等）' : null;
     const row = await this.prisma.meetingBooking.create({ data: { ownerId: owner.id, requesterId: me.id, title, note, startAt: sv, endAt: ev } });
+    // 老师日历占位：待确认预约以「已预约待确认」出现在老师后台日程（kind=BUSY 占用时段，与 computeAvailability 同口径防撞车）；确认转正 / 驳回删除
+    try {
+      const dayStart = this.bjDayStart(sv);
+      const sameDay = fmtBeijing(sv).slice(0, 10) === fmtBeijing(ev).slice(0, 10);
+      const evRow = await this.prisma.personalEvent.create({
+        data: {
+          userId: owner.id,
+          date: dayStart,
+          startMin: Math.min(Math.max(Math.round((sv.getTime() - dayStart.getTime()) / 60000), 0), 1440),
+          endMin: sameDay ? Math.min(Math.round((ev.getTime() - dayStart.getTime()) / 60000), 1440) : 1440,
+          kind: 'BUSY',
+          title: `【预约待确认】${me.name}：${title}`,
+          note: note ?? undefined,
+          source: 'booking',
+        },
+        select: { id: true },
+      });
+      await this.prisma.meetingBooking.update({ where: { id: row.id }, data: { ownerEventId: evRow.id } });
+    } catch (e: any) {
+      this.logger.warn(`预约日历占位创建失败（booking=${row.id}）：${e?.message ?? e}`);
+    }
     // 站内信 + 钉钉私聊（通知失败不阻断业务）
     try {
       await this.notifications.create(owner.id, {
@@ -4194,6 +4215,8 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         startAt: true,
         endAt: true,
         status: true,
+        note: true,
+        ownerEventId: true,
         owner: { select: { name: true } },
         requester: { select: { id: true, name: true, phone: true } },
       },
@@ -4203,9 +4226,48 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     if (row.status !== 'PENDING') throw new BadRequestException(`该预约当前状态是 ${row.status}，不能重复审批`);
     const approve = body?.approve !== false;
     const note = String(body?.note ?? '').trim().slice(0, 200) || null;
+    // 确认 → 日历占位转正为正式预约 + 生成会议记录（status=SCHEDULED，参会人=双方，「我的会议」可见）；驳回 → 删除日历占位，时段空出
+    let meetingId: string | null = null;
+    if (approve) {
+      if (row.ownerEventId) {
+        try {
+          await this.prisma.personalEvent.update({
+            where: { id: row.ownerEventId },
+            data: { title: `【预约】${row.requester.name}：${row.title}` },
+          });
+        } catch (e: any) {
+          this.logger.warn(`预约日历占位转正失败（booking=${row.id}）：${e?.message ?? e}`);
+        }
+      }
+      try {
+        const meeting = await this.prisma.meeting.create({
+          data: {
+            title: `${row.requester.name} 与 ${row.owner.name}：${row.title}`.slice(0, 100),
+            scope: 'PERSONAL',
+            type: 'OTHER',
+            agenda: row.note || row.title,
+            ownerId: row.ownerId,
+            startAt: row.startAt,
+            endAt: row.endAt,
+            status: 'SCHEDULED',
+            participantIds: [row.ownerId, row.requesterId],
+          },
+          select: { id: true },
+        });
+        meetingId = meeting.id;
+      } catch (e: any) {
+        this.logger.warn(`预约生成会议失败（booking=${row.id}）：${e?.message ?? e}`);
+      }
+    } else if (row.ownerEventId) {
+      try {
+        await this.prisma.personalEvent.delete({ where: { id: row.ownerEventId } });
+      } catch (e: any) {
+        this.logger.warn(`预约日历占位删除失败（booking=${row.id}）：${e?.message ?? e}`);
+      }
+    }
     await this.prisma.meetingBooking.update({
       where: { id: row.id },
-      data: { status: approve ? 'CONFIRMED' : 'REJECTED', decideNote: note, decidedAt: new Date() },
+      data: { status: approve ? 'CONFIRMED' : 'REJECTED', decideNote: note, decidedAt: new Date(), meetingId },
     });
     const timeText = `${fmtBeijing(row.startAt).slice(0, 16)}-${fmtBeijing(row.endAt).slice(11, 16)}`;
     try {

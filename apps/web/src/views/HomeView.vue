@@ -577,9 +577,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import dayjs from 'dayjs';
-import { announcementsApi, departmentsApi, intakeApi, projectsApi, reportsApi, tasksApi, meetingsApi, pbcApi, feedbackApi } from '../api';
+import { agentApi, announcementsApi, departmentsApi, intakeApi, projectsApi, reportsApi, tasksApi, meetingsApi, pbcApi, feedbackApi } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { TASK_PRIORITY, TASK_STATUS, fmt, isUpdateToday, timeAgo, updateDate } from '../utils/format';
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
@@ -1206,17 +1206,58 @@ const reviewRows = computed(() => [
     title: r.name,
     meta: `${r.month} · 已自评 ${r.selfTotal ?? '—'} 分 · 等待复核`,
   })),
+  // 预约确认：成员约老师的时间（确认后自动生成会议；行内直接同意/驳回）
+  ...review.bookings.value.map((b: any) => ({
+    key: 'bk-' + b.id,
+    kind: 'booking' as const,
+    id: b.id,
+    tagText: '预约',
+    tagType: 'warning',
+    title: `${b.who} 想约你：${b.title || '未填事由'}`,
+    meta: `${(b.start || '').slice(5, 16)}-${(b.end || '').slice(11, 16)} · 等待确认`,
+  })),
 ]);
 
-/** 跳去审核：项目进详情页；PBC 计划/考核进工作管理对应视图（review 深链已支持自动切「我的」视角） */
+/** 跳去审核：项目进详情页；PBC 计划/考核进工作管理对应视图（review 深链已支持自动切「我的」视角）；预约行内确认 */
 function goReviewItem(row: (typeof reviewRows.value)[number]) {
-  if (row.kind === 'project' && row.id) {
+  if (row.kind === 'booking' && row.id) {
+    decideBookingRow(row.id, row.title);
+  } else if (row.kind === 'project' && row.id) {
     router.push('/projects/' + row.id);
   } else if (row.kind === 'pbc-plan') {
     router.push({ path: '/reports', query: { tab: 'pbc', view: 'plan' } });
   } else {
     router.push({ path: '/reports', query: { tab: 'pbc', view: 'review' } });
   }
+}
+
+/** 待确认预约行内处理：弹窗选同意（确认并生成会议）/ 驳回（时段空出）；与 AI 助手 BOOKING_DECIDE 同一接口 */
+async function decideBookingRow(id: string, title: string) {
+  try {
+    await ElMessageBox.confirm(`「${title}」`, '同意这个沟通预约？（确认后自动生成会议）', {
+      confirmButtonText: '同意',
+      cancelButtonText: '驳回',
+      distinguishCancelAndClose: true,
+      type: 'info',
+    });
+    await agentApi.decideBooking(id, { approve: true });
+    ElMessage.success('已确认，会议已生成并加入你的日程');
+  } catch (e: any) {
+    if (e === 'cancel') {
+      try {
+        await agentApi.decideBooking(id, { approve: false });
+        ElMessage.success('已驳回，该时段已空出');
+      } catch (err: any) {
+        ElMessage.error(err?.response?.data?.message ?? err?.message ?? '操作失败');
+      }
+    } else if (e !== 'close') {
+      ElMessage.error(e?.response?.data?.message ?? e?.message ?? '操作失败');
+      return;
+    } else {
+      return;
+    }
+  }
+  review.load();
 }
 
 /** 当前正在提交的任务 id（同一时间只允许一条，避免连点） */

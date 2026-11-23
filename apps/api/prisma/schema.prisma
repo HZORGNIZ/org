@@ -1475,6 +1475,8 @@ model MeetingBooking {
   status      String    @default("PENDING") // PENDING=待老师确认 / CONFIRMED / REJECTED / CANCELLED
   decideNote  String? // 老师确认/驳回时的意见
   decidedAt   DateTime?
+  ownerEventId String? // 待确认期间在被约老师日历上的占位日程（PersonalEvent，kind=BUSY）；确认转正 / 驳回删除
+  meetingId    String? // 老师确认后生成的会议记录（Meeting，status=SCHEDULED）；「我的会议」里可见
   remindedAt  DateTime? // 会前材料提醒已发送时间（开始前 2 小时私聊提醒发起人，防重复）
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
