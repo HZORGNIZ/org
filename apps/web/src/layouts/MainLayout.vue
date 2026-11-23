@@ -26,9 +26,6 @@
         <el-menu-item index="/meetings">
           <el-icon><ChatDotSquare /></el-icon><span>会议活动</span>
         </el-menu-item>
-        <el-menu-item index="/ideas">
-          <el-icon><Sunny /></el-icon><span>灵感</span>
-        </el-menu-item>
         <el-menu-item index="/data-center">
           <el-icon><Notebook /></el-icon><span>资料中心</span>
         </el-menu-item>
