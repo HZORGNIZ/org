@@ -105,16 +105,16 @@ const CARDS: Record<'org' | 'project' | 'member', WelcomeCard[]> = {
   member: [
     {
       title: '跟老师聊',
-      desc: '舒舒老师 / 杨老师分身，什么事都能聊',
+      desc: '书书老师 / 杨老师分身，什么事都能聊',
       split: true,
       opts: [
-        { label: '舒舒老师分身', bot: 'twin-shushu' },
+        { label: '书书老师分身', bot: 'twin-shushu' },
         { label: '杨老师分身', bot: 'twin-yangli' },
       ],
     },
     { title: '写我的日报', desc: 'AI 拉取今天的进展自动成稿，我确认后提交', bot: 'assistant', text: '帮我写今天的日报' },
     { title: '没处理的任务', desc: '待办清单 + 逾期提醒 + 建议顺序', bot: 'assistant', text: '列出我还没处理的任务和逾期项' },
-    { title: '我的会 · 约时间', desc: '查我的日程；约舒舒老师 / 杨老师的时间', bot: 'booking', text: '我想约老师的时间' },
+    { title: '我的会 · 约时间', desc: '查我的日程；约书书老师 / 杨老师的时间', bot: 'booking', text: '我想约老师的时间' },
   ],
   project: [
     { title: '项目风险扫描', desc: '延期项目 · 逾期任务 · 连续无日报', bot: 'assistant', text: '扫一下当前项目风险：延期项目、逾期任务、连续没交日报的项目' },
