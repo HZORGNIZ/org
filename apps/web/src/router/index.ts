@@ -30,9 +30,9 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'home', component: () => import('../views/HomeView.vue') },
       { path: 'ideas', name: 'ideas', component: () => import('../views/IdeasView.vue') },
-      { path: 'tasks', name: 'tasks', component: () => import('../views/TasksView.vue') },
-      // 看板已并入「任务」页的大 tab：菜单/首页入口/旧书签统一跳过去（不再单独占一页）
-      { path: 'board', redirect: { name: 'tasks', query: { tab: 'board' } } },
+      // 任务页已并入「工作台」的任务大 tab：旧菜单/书签统一跳过去（子 tab 用 ttab 带给内嵌视图）
+      { path: 'tasks', redirect: (to) => ({ name: 'reports', query: { ...to.query, tab: 'task', ttab: to.query.tab } }) },
+      { path: 'board', redirect: { name: 'reports', query: { tab: 'task', ttab: 'board' } } },
       { path: 'projects', name: 'projects', component: () => import('../views/ProjectsView.vue') },
       { path: 'projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetailView.vue') },
       { path: 'projects/:id/weekly-report', name: 'project-weekly-report', component: () => import('../views/ProjectWeeklyReportView.vue') },

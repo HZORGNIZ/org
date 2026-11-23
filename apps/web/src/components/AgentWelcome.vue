@@ -2,7 +2,7 @@
   <div class="aw">
     <!-- 1. 问候行：机器人小图标 + 时段问候 + 角色徽章 -->
     <div class="aw-hd">
-      <span class="aw-avatar" v-html="robotSvg"></span>
+      <span class="aw-avatar"><AgentRobot :size="42" /></span>
       <div class="aw-hd-txt">
         <div class="aw-greet">{{ greetWord }}，{{ name || '你好' }}</div>
         <div class="aw-sub">我是项目助理小助手，下面这些都能帮你做 👇</div>
@@ -57,6 +57,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import AgentRobot from './AgentRobot.vue';
 
 /**
  * 智能体助手首屏欢迎屏：三入口（首页悬浮窗 / /mobile 全屏）共用同一空态。
@@ -153,16 +154,7 @@ const CAP_GROUPS: Record<'org' | 'project' | 'member', { title: string; items: s
 };
 const capGroups = computed(() => CAP_GROUPS[props.bucket] ?? CAP_GROUPS.member);
 
-// 问候行小机器人图标（scoped 样式里对 v-html 注入的 svg 用 :deep）
-const robotSvg =
-  '<svg viewBox="0 0 48 48" width="30" height="30">' +
-  '<circle cx="24" cy="24" r="23" fill="#428bff" />' +
-  '<rect x="13" y="16" width="22" height="16" rx="5" fill="#fff" />' +
-  '<circle cx="20" cy="24" r="2.4" fill="#428bff" />' +
-  '<circle cx="28" cy="24" r="2.4" fill="#428bff" />' +
-  '<rect x="21" y="9" width="6" height="4" rx="2" fill="#fff" />' +
-  '<line x1="24" y1="13" x2="24" y2="16" stroke="#fff" stroke-width="2" />' +
-  '</svg>';
+// 问候行小机器人图标已换成 AgentRobot 形象组件（与悬浮球/面板头同一套 SVG）
 </script>
 
 <style scoped>
@@ -171,6 +163,13 @@ const robotSvg =
   flex-direction: column;
   gap: 12px;
   padding: 4px 2px 8px;
+}
+/* 科技感底纹：淡蓝细网格 + 左上角一圈柔光，让欢迎区更像“智能体驾驶舱” */
+.aw {
+  position: relative;
+  background-image: repeating-linear-gradient(0deg, rgba(66, 139, 255, 0.05) 0, rgba(66, 139, 255, 0.05) 1px, transparent 1px, transparent 22px),
+    repeating-linear-gradient(90deg, rgba(66, 139, 255, 0.05) 0, rgba(66, 139, 255, 0.05) 1px, transparent 1px, transparent 22px);
+  border-radius: 12px;
 }
 .aw-hd {
   display: flex;

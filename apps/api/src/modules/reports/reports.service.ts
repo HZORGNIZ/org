@@ -1241,6 +1241,8 @@ export class ReportsService {
       monthDays,
       totalDays: rows.filter((r) => Number(r.hours) > 0).length,
       firstWorkDay: rows.length ? fmtBeijingDate(rows[0].periodStart) : null,
+      // 今日是否已发布日报（首页统计豆腐块：未写红标 + 直达写日报入口）
+      todaySubmitted: rows.some((r) => r.periodStart && dayOf(r.periodStart).getTime() === nowBj.getTime()),
     };
   }
 

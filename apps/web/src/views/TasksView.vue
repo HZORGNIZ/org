@@ -1,8 +1,15 @@
 <template>
-  <div class="page">
-    <div class="page-title">
+  <div :class="embedded ? 'task-embedded' : 'page'">
+    <div v-if="!embedded" class="page-title">
       任务
       <el-button type="primary" @click="showForm = true">
+        <el-icon><Plus /></el-icon>&nbsp;新建任务
+      </el-button>
+    </div>
+
+    <div v-if="embedded" class="task-embedded-bar">
+      <span class="task-embedded-hint">任务列表 / 看板 / 我的日程 / 成员总览</span>
+      <el-button type="primary" size="small" @click="showForm = true">
         <el-icon><Plus /></el-icon>&nbsp;新建任务
       </el-button>
     </div>
@@ -223,15 +230,19 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-/** 大 tab：任务列表 / 任务看板 / 我的日程 / 成员总览；与地址栏 ?tab=board|myday|overview 同步（首页等入口直达） */
+/** 大 tab：任务列表 / 任务看板 / 我的日程 / 成员总览；与地址栏 ?tab=board|myday|overview 同步（首页等入口直达）
+ *  内嵌模式（embedded）：本视图被工作台「任务」大 tab 复用时，URL 归工作台管，子切换不再写地址栏 */
 type TabKey = 'list' | 'board' | 'myday' | 'overview';
+const props = defineProps<{ embedded?: boolean; initialTab?: TabKey }>();
 const tab = ref<TabKey>(
-  route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : route.query.tab === 'overview' ? 'overview' : 'list',
+  props.initialTab ??
+    (route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : route.query.tab === 'overview' ? 'overview' : 'list'),
 );
 const boardRef = ref<InstanceType<typeof TaskBoardPanel> | null>(null);
 
 function onTabChange(name: any) {
   tab.value = name === 'board' ? 'board' : name === 'myday' ? 'myday' : name === 'overview' ? 'overview' : 'list';
+  if (props.embedded) return;
   const q = { ...route.query };
   if (tab.value === 'board') q.tab = 'board';
   else if (tab.value === 'myday') q.tab = 'myday';
@@ -244,6 +255,7 @@ function onTabChange(name: any) {
 watch(
   () => route.query.tab,
   (v) => {
+    if (props.embedded) return;
     const t: TabKey = v === 'board' ? 'board' : v === 'myday' ? 'myday' : v === 'overview' ? 'overview' : 'list';
     if (t !== tab.value) tab.value = t;
   },
@@ -640,4 +652,18 @@ onUnmounted(() => window.removeEventListener('resize', onResize));
 :deep(.el-table__row.th-3) > td:first-child { box-shadow: inset 4px 0 0 #1b4fa8; }
 :deep(.el-table__row.th-done) > td:first-child { box-shadow: inset 4px 0 0 #c9ccd1; }
 :deep(.el-table__row:hover) > td { background: #ecf3fe !important; }
+/* 内嵌工作台模式：去掉独立页的留白，加一条紧凑操作栏 */
+.task-embedded {
+  --page-x: 0px;
+}
+.task-embedded-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.task-embedded-hint {
+  font-size: 12px;
+  color: #909399;
+}
 </style>

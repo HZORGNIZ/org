@@ -1,30 +1,48 @@
 <template>
   <div class="page">
-    <!-- 欢迎横幅：问候 + 今日工作概览（录入统一走下方智能录入，不再放写日报/发公告按钮） -->
+    <!-- 欢迎横幅：问候（统计已下移到数据看板条） -->
     <div class="hero">
       <div class="hero-main">
         <div class="hero-eyebrow">{{ today }}</div>
         <div class="hero-title">{{ greeting }}，{{ auth.user?.name }}</div>
         <div class="hero-caption">欢迎回来，这是你今天的工作概览</div>
       </div>
-      <div class="hero-stats">
-        <button type="button" class="hero-stat" title="查看我的待办任务" @click="goTodo">
-          <b>{{ my.todo.length }}</b>
-          <span>待办任务<el-icon :size="10"><ArrowRight /></el-icon></span>
-        </button>
-        <button type="button" class="hero-stat" title="查看我的逾期任务" @click="goOverdue">
-          <b :class="{ warn: my.overdue > 0 }">{{ my.overdue }}</b>
-          <span>逾期任务<el-icon :size="10"><ArrowRight /></el-icon></span>
-        </button>
-        <button type="button" class="hero-stat" title="查看本周工时排行" @click="goHours">
-          <b>{{ hoursStat.weekHours }}<i>h</i></b>
-          <span>本周工时<el-icon :size="10"><ArrowRight /></el-icon></span>
-        </button>
-        <button type="button" class="hero-stat" title="查看本月工时" @click="goHours">
-          <b>{{ hoursStat.monthHours }}<i>h</i></b>
-          <span>本月工时<el-icon :size="10"><ArrowRight /></el-icon></span>
-        </button>
-      </div>
+    </div>
+
+    <!-- 数据看板：8 个统计豆腐块，一眼看清今天的工作状态；每格可点直达对应列表 -->
+    <div class="dash-strip">
+      <button type="button" class="dash-cell" title="查看我的待办任务" @click="goTodo">
+        <span class="dash-label">待办任务</span>
+        <b class="dash-num">{{ my.todo.length }}</b>
+      </button>
+      <button type="button" class="dash-cell" title="查看我的逾期任务" @click="goOverdue">
+        <span class="dash-label">逾期任务</span>
+        <b class="dash-num" :class="{ danger: my.overdue > 0 }">{{ my.overdue }}</b>
+      </button>
+      <button type="button" class="dash-cell" title="本周已发布日报工时" @click="goHours">
+        <span class="dash-label">本周工时</span>
+        <b class="dash-num">{{ hoursStat.weekHours }}<i>h</i></b>
+      </button>
+      <button type="button" class="dash-cell" title="本月已发布日报工时" @click="goHours">
+        <span class="dash-label">本月工时</span>
+        <b class="dash-num">{{ hoursStat.monthHours }}<i>h</i></b>
+      </button>
+      <button type="button" class="dash-cell" title="去工作台写今日日报" @click="goDaily">
+        <span class="dash-label">今日日报</span>
+        <b class="dash-num" :class="{ danger: !hoursStat.todaySubmitted }">{{ hoursStat.todaySubmitted ? '已写' : '未写' }}</b>
+      </button>
+      <button type="button" class="dash-cell" title="查看本周会议" @click="goMeetings">
+        <span class="dash-label">本周会议</span>
+        <b class="dash-num">{{ weekMeetingCount }}</b>
+      </button>
+      <button type="button" class="dash-cell" title="查看我的项目" @click="goProjects">
+        <span class="dash-label">进行中项目</span>
+        <b class="dash-num">{{ projectUpdates.length }}</b>
+      </button>
+      <button type="button" class="dash-cell" title="查看本周工时排行" @click="goHours">
+        <span class="dash-label">工时排名</span>
+        <b class="dash-num">{{ myHoursRank ? '第' + myHoursRank + '名' : '—' }}</b>
+      </button>
     </div>
 
     <!-- 播报 + 右侧栏收起：同一行（播报占满剩余宽度，收起按钮贴最右；手机不显示按钮） -->
@@ -581,14 +599,43 @@ const router = useRouter();
 const progressSection = ref<HTMLElement | null>(null);
 const progressFlash = ref(false);
 function goTodo() {
-  router.push({ path: '/tasks', query: { scope: 'mine' } });
+  router.push({ path: '/reports', query: { tab: 'task', ttab: 'list', scope: 'mine' } });
 }
 function goOverdue() {
-  router.push({ path: '/tasks', query: { scope: 'overdue' } });
+  router.push({ path: '/reports', query: { tab: 'task', ttab: 'list', scope: 'overdue' } });
 }
 function goHours() {
   router.push({ path: '/reports', query: { tab: 'hours' } });
 }
+function goDaily() {
+  router.push({ path: '/reports', query: { tab: 'daily' } });
+}
+function goMeetings() {
+  router.push('/meetings');
+}
+function goProjects() {
+  router.push('/projects');
+}
+// ---- 数据看板统计 ----
+// 本周会议数：开始时间落在本周一 ~ 周日的会议（时间解析失败按不计入）
+const weekMeetingCount = computed(() => {
+  const now = new Date();
+  const dayIdx = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayIdx);
+  const nextMonday = new Date(monday.getTime() + 7 * 86400000);
+  let n = 0;
+  for (const m of allMeetings.value as any[]) {
+    const t = m?.startAt ? new Date(m.startAt) : null;
+    if (t && !isNaN(t.getTime()) && t >= monday && t < nextMonday) n += 1;
+  }
+  return n;
+});
+// 本周工时榜里我的名次（按 userId 匹配，缺失退回姓名匹配）
+const myHoursRank = computed<number | null>(() => {
+  const rows = (hoursWeek.value as any)?.rows || [];
+  const hit = rows.find((e: any) => (e.userId && e.userId === auth.user?.id) || (!e.userId && e.name === auth.user?.name));
+  return hit?.rank ? Number(hit.rank) : null;
+});
 function goTodayProgress() {
   progressSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   progressFlash.value = true;
@@ -657,7 +704,7 @@ const deptPath = computed(() => (auth.isAdmin ? '/admin?tab=departments' : '/dep
 const otherDepts = computed(() => (myDept.value?.departments ?? []).filter((d: any) => d.id !== myDept.value?.id));
 const my = ref<{ todo: any[]; done: any[]; overdue: number; hidden: number }>({ todo: [], done: [], overdue: 0, hidden: 0 });
 // 顶部工时卡：本人本周/本月/累计（已发布日报 hours 求和），接口失败时保持全 0 不阻断首页
-const hoursStat = ref({ weekHours: 0, monthHours: 0, totalHours: 0, weekDays: 0, monthDays: 0, totalDays: 0, firstWorkDay: '' });
+const hoursStat = ref({ weekHours: 0, monthHours: 0, totalHours: 0, weekDays: 0, monthDays: 0, totalDays: 0, firstWorkDay: '' as string | null, todaySubmitted: false });
 const allMeetings = ref<any[]>([]);
 const projectUpdates = ref<any[]>([]);
 // 首页进展卡片排序：有进展的按最新一条进展的消息时间倒序排前，无进展的保持原顺序沉底（后端按项目 updatedAt 排，进展不 touch 项目）
@@ -872,9 +919,8 @@ const createForm = reactive({ title: '', content: '', pinned: false, expiresAt: 
 const taskDrawer = ref(false);
 const taskId = ref<string | null>(null);
 
-// ---- 顶部 AI 录入（文字 + 语音）----
+// ---- 顶部 AI 录入（文字 + 语音）---- 写日报入口已移到工作台（日报 tab），首页不再放日报预设
 const INTAKE_PRESETS = [
-  { value: 'DAILY', label: '日报', icon: 'Document' },
   { value: 'WEEKLY', label: '周报', icon: 'Calendar' },
   { value: 'TASK', label: '任务', icon: 'List' },
   { value: 'IDEA', label: '灵感', icon: 'Sunny' },
@@ -1444,10 +1490,11 @@ onMounted(() => {
   margin-bottom: 0;
 }
 /* 手机端顺序：最高频的待办放最前，其次智能录入；右侧栏（公告+榜单+全部功能）整体排到进展之后 */
+/* 优先级重排：待办 → 我的日程 → 关键任务 → 智能录入 → 项目进展 → 侧栏（公告/榜单/入口） */
 .home-grid .todo-card { order: 1; }
-.home-grid .intake-card { order: 2; }
+.home-grid .schedule-card { order: 2; }
 .home-grid .key-card { order: 3; }
-.home-grid .schedule-card { order: 4; }
+.home-grid .intake-card { order: 4; }
 .home-grid .progress-section { order: 5; }
 .home-grid .side-col { order: 6; }
 
@@ -1681,6 +1728,65 @@ onMounted(() => {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.72);
   margin-top: 6px;
+}
+/* 数据看板：8 个统计豆腐块横条（PC 一行 8 格，手机 2×4） */
+.dash-strip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.dash-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e4e9f2);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s;
+}
+.dash-cell:hover {
+  border-color: #7fb2f0;
+  box-shadow: 0 2px 10px rgba(66, 139, 255, 0.12);
+}
+.dash-cell:active {
+  transform: scale(0.98);
+}
+.dash-label {
+  font-size: 12px;
+  color: #7a8699;
+  white-space: nowrap;
+}
+.dash-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1f2d3d;
+  line-height: 1.1;
+}
+.dash-num i {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 1px;
+}
+.dash-num.danger {
+  color: #e24b4a;
+}
+@media (max-width: 1200px) {
+  .dash-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 767.98px) {
+  .dash-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
 }
 .hero-stats {
   position: relative;

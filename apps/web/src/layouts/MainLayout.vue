@@ -15,13 +15,13 @@
           <el-icon><HomeFilled /></el-icon><span>首页</span>
         </el-menu-item>
         <el-menu-item index="/reports">
-          <el-icon><Document /></el-icon><span>工作管理</span>
+          <el-icon><Document /></el-icon><span>工作台</span>
         </el-menu-item>
         <el-menu-item index="/projects">
-          <el-icon><FolderOpened /></el-icon><span>项目</span>
+          <el-icon><FolderOpened /></el-icon><span>项目管理</span>
         </el-menu-item>
-        <el-menu-item index="/tasks">
-          <el-icon><List /></el-icon><span>任务</span>
+        <el-menu-item v-if="auth.isAdmin || auth.isDeptLeader" index="/departments">
+          <el-icon><OfficeBuilding /></el-icon><span>部门管理</span>
         </el-menu-item>
         <el-menu-item index="/meetings">
           <el-icon><ChatDotSquare /></el-icon><span>会议活动</span>
@@ -218,8 +218,8 @@ async function submitPwd() {
 // 移动端底部导航：高频直达 5 项；消息入口保留顶部铃铛（避免重复），低频入口（项目/看板/复盘/知识库等）在首页底部快捷入口
 const tabs: { path: string; label: string; icon: string; tab?: string }[] = [
   { path: '/', label: '首页', icon: 'HomeFilled' },
-  { path: '/tasks', label: '任务', icon: 'List' },
-  { path: '/reports', label: '日报', icon: 'Document' },
+  { path: '/reports', label: '工作台', icon: 'Document' },
+  { path: '/projects', label: '项目', icon: 'FolderOpened' },
   { path: '/data-center', label: '资料', icon: 'Notebook', tab: 'sops' },
   { path: '/profile', label: '我的', icon: 'User' },
 ];

@@ -162,12 +162,13 @@
 
       </el-tab-pane>
 
-      <!-- 部门管理（原侧边菜单「部门」内迁到这里）：部门表格（新增/编辑/负责人/排序/删除）+ 部门详情页（项目/成员/文档/文件/日报规则/汇报树） -->
-      <el-tab-pane label="部门管理" name="departments" lazy>
+      <!-- 部门设置（原「部门管理」，与新一级菜单「部门管理」区分）：顶部架构图（可切列表）+ 部门表格 + 部门详情页 -->
+      <el-tab-pane label="部门设置" name="departments" lazy>
       <!-- lazy：部门详情页会拉成员/项目/文档/文件/汇报树多组接口，不必在打开管理后台时就预加载 -->
+    <DeptOrgChart>
     <div class="page-card">
       <div class="page-title sub">
-        部门管理
+        部门设置
         <el-button type="primary" size="small" @click="openCreateDept">新增部门</el-button>
       </div>
       <el-table :data="departments" v-loading="loadingDepts" size="small" class="table">
@@ -233,6 +234,7 @@
 
     <!-- 部门详情：内嵌部门页（项目/成员/文档/文件/日报规则/汇报树），隐藏其自身页头文字，只保留顶部的部门切换 -->
     <DepartmentView embedded />
+    </DeptOrgChart>
       </el-tab-pane>
 
       <el-tab-pane label="审批与集成" name="approve">
@@ -700,6 +702,7 @@ import { integrationsApi, usersApi, departmentsApi, documentsApi, authApi, proje
 import { fmt, formatBytes } from '../../utils/format';
 import { useAuthStore } from '../../stores/auth';
 import DepartmentView from '../DepartmentView.vue';
+import DeptOrgChart from '../../components/DeptOrgChart.vue';
 
 const auth = useAuthStore();
 const router = useRouter();

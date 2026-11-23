@@ -10,21 +10,14 @@
     @pointermove="onBallMove"
     @pointerup="onBallUp"
   >
-    <svg viewBox="0 0 48 48" width="46" height="46">
-      <circle cx="24" cy="24" r="23" fill="#428bff" />
-      <rect x="13" y="16" width="22" height="16" rx="5" fill="#fff" />
-      <circle cx="20" cy="24" r="2.4" fill="#428bff" />
-      <circle cx="28" cy="24" r="2.4" fill="#428bff" />
-      <rect x="21" y="9" width="6" height="4" rx="2" fill="#fff" />
-      <line x1="24" y1="13" x2="24" y2="16" stroke="#fff" stroke-width="2" />
-      <rect x="17" y="34" width="14" height="3" rx="1.5" fill="#d7e7ff" />
-    </svg>
+    <AgentRobot :size="52" />
     <span class="agent-ball-tip">问问我</span>
   </div>
 
   <!-- 对话面板：锚定在球附近（左右按屏幕半区自适应）；内嵌模式全屏铺满 -->
   <div v-if="open" class="agent-panel" :class="{ 'agent-panel-mobile': embedded, 'agent-panel-inline': mode === 'inline' }" :style="floating ? panelStyle : {}">
     <div class="agent-hd">
+      <span class="agent-hd-avatar"><AgentRobot :size="34" :thinking="sending" /></span>
       <span class="agent-hd-title">{{ curBot?.name ?? '项目助理 · 小助手' }}</span>
       <span class="agent-hd-sub" :title="hdSub">{{ hdSub }}</span>
       <div class="agent-hd-ops">
@@ -143,8 +136,10 @@
       <div v-for="(m, i) in msgs" :key="i" class="agent-row" :class="'agent-row-' + m.role">
         <!-- 用户消息 -->
         <div v-if="m.role === 'user'" class="agent-bubble agent-bubble-user">{{ m.text }}</div>
-        <!-- 助手消息：正文 + 工具痕迹 + 动作确认卡 -->
-        <div v-else class="agent-msg-agent">
+        <!-- 助手消息：形象小头像 + 正文 + 工具痕迹 + 动作确认卡 -->
+        <div v-else class="agent-msg-wrap">
+          <span class="agent-msg-avatar"><AgentRobot :size="26" /></span>
+          <div class="agent-msg-agent">
           <div v-if="m.trace && m.trace.length" class="agent-trace">已查询：{{ m.trace.map((t: any) => TOOL_LABELS[t.tool] ?? t.tool).join('、') }}</div>
           <div class="agent-bubble agent-bubble-agent">{{ m.text }}</div>
           <!-- 只读回答里的可点跳转（工具结果里带的 links，不进模型上下文） -->
@@ -193,10 +188,14 @@
           </div>
           <div v-else-if="m.action && m.decided === 'done'" class="agent-action-done">✅ 已执行：{{ m.resultLabel || m.action.label }}<router-link v-if="m.link" :to="m.link" class="agent-done-link">去查看</router-link></div>
           <div v-else-if="m.action && m.decided === 'cancelled'" class="agent-action-done agent-action-cancelled">已取消该操作</div>
+          </div>
         </div>
       </div>
       <div v-if="sending" class="agent-row agent-row-assistant">
-        <div class="agent-bubble agent-bubble-agent agent-typing">思考中<span class="dot">...</span></div>
+        <div class="agent-msg-wrap">
+          <span class="agent-msg-avatar"><AgentRobot :size="26" thinking /></span>
+          <div class="agent-bubble agent-bubble-agent agent-typing">思考中<span class="dot">...</span></div>
+        </div>
       </div>
     </div>
 
@@ -256,6 +255,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router';
 import AssistantModeSwitch from './AssistantModeSwitch.vue';
 import AgentWelcome from './AgentWelcome.vue';
+import AgentRobot from './AgentRobot.vue';
 import { ElMessage } from 'element-plus';
 import { Promotion, Microphone } from '@element-plus/icons-vue';
 import { agentApi, meetingsApi, reportsApi, tasksApi } from '../api';
@@ -584,12 +584,15 @@ function onResize() {
   Object.assign(pos, clampPos(pos.x, pos.y));
 }
 
-/** 面板锚点：贴屏幕左半→面板往右展开，反之往左（PANEL_W 与 .agent-panel 的 width 保持一致） */
-const PANEL_W = 460;
+/** 面板锚点：PC 大屏改为居中大窗（Grok 式对话台）；窄屏保持贴球展开 */
+const PANEL_W = 980;
 const panelStyle = computed(() => {
   const winW = window.innerWidth;
   const winH = window.innerHeight;
-  // 与 CSS 的 min(92vw, PANEL_W) 同口径，小屏时实际宽度更小
+  if (winW >= 1024) {
+    // 大屏：居中 980×660，不跟悬浮球位置走
+    return { left: '50%', top: `${Math.max(20, Math.round((winH - Math.min(winH * 0.82, 660)) / 2))}px`, transform: 'translateX(-50%)' };
+  }
   const panelW = Math.min(winW * 0.92, PANEL_W);
   const onLeft = pos.x < winW / 2;
   return {
@@ -1249,11 +1252,11 @@ defineExpose({ checkConfig, start });
 .agent-panel {
   position: fixed;
   z-index: 3001;
-  width: min(92vw, 460px);
-  height: min(72vh, 560px);
+  width: min(94vw, 980px);
+  height: min(82vh, 660px);
   background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  border-radius: 16px;
+  box-shadow: 0 24px 72px rgba(12, 43, 94, 0.28);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1296,11 +1299,16 @@ defineExpose({ checkConfig, start });
 }
 .agent-hd {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 10px 12px;
   background: linear-gradient(135deg, #428bff, #6ea4ff);
   color: #fff;
+}
+.agent-hd-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  filter: drop-shadow(0 2px 6px rgba(4, 44, 83, 0.4));
 }
 .agent-hd-title { font-weight: 600; font-size: 14px; flex: 0 0 auto; white-space: nowrap; }
 /* 副标题固定只占一行：宽度不够就省略号截断，鼠标悬浮看全文（原生 title） */
@@ -1359,7 +1367,10 @@ defineExpose({ checkConfig, start });
 .agent-row { display: flex; margin-bottom: 10px; }
 .agent-row-user { justify-content: flex-end; }
 .agent-row-assistant { justify-content: flex-start; }
-.agent-msg-agent { max-width: 86%; display: flex; flex-direction: column; gap: 4px; }
+/* 助手消息带形象小头像：头像固定左侧，正文列随内容收缩 */
+.agent-msg-wrap { max-width: 86%; display: flex; align-items: flex-start; gap: 8px; }
+.agent-msg-avatar { flex: 0 0 auto; margin-top: 2px; }
+.agent-msg-agent { flex: 1 1 auto; min-width: 0; max-width: none; display: flex; flex-direction: column; gap: 4px; }
 .agent-bubble {
   padding: 8px 11px;
   border-radius: 10px;

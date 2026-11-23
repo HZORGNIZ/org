@@ -1,17 +1,18 @@
 <template>
   <div class="page">
     <div class="page-title-row">
-      <div class="page-title">工作管理</div>
+      <div class="page-title">工作台</div>
       <el-button v-if="canViewTeam" size="small" plain type="primary" @click="goCompanyWeekly">
         <el-icon><DocumentCopy /></el-icon>&nbsp;公司/部门周报聚合
       </el-button>
     </div>
 
-    <!-- 大 tab：日报 / 周报 / PBC / 日报看板 / 工时统计 / 我的工作时间，点 tab 直达对应区块，不用整页往下翻 -->
+    <!-- 大 tab：日报 / 周报 / PBC / 任务（内嵌任务列表·看板·我的日程·成员总览）/ 日报看板 / 工时统计 / 我的工作时间，点 tab 直达对应区块，不用整页往下翻 -->
     <el-tabs v-model="tab" class="rm-tabs" @tab-change="onTabChange">
       <el-tab-pane label="日报" name="daily" />
       <el-tab-pane label="周报" name="weekly" />
       <el-tab-pane label="PBC 月计划" name="pbc" />
+      <el-tab-pane label="任务" name="task" lazy />
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
       <el-tab-pane label="我的实践/培训时间" name="schedule" />
@@ -28,6 +29,9 @@
 
     <!-- 待我审核：项目审批 / PBC 计划审批 / PBC 考核评分聚合清单，点行直达对应审核入口 -->
     <PendingReviewPanel v-else-if="tab === 'review'" @jump="onReviewJump" />
+
+    <!-- 任务：复用整个 TasksView（内嵌模式，不写地址栏）；旧 /tasks?tab=xxx 深链由路由映射 initialTab -->
+    <TasksView v-else-if="tab === 'task'" embedded :initial-tab="embeddedTaskTab" />
 
     <!-- 日报 / 周报 / PBC：左侧填写 + 历史文档（原右栏工作时间已改为独立 TAB） -->
     <div v-else>
@@ -756,6 +760,7 @@ import PbcResultCard from '../components/PbcResultCard.vue';
 import ReportsStatsPanel from '../components/ReportsStatsPanel.vue';
 import WorkSchedulePanel from '../components/WorkSchedulePanel.vue';
 import PendingReviewPanel from '../components/PendingReviewPanel.vue';
+import TasksView from './TasksView.vue';
 import ReportDoc from '../components/ReportDoc.vue';
 import type { DocDay, DocTag } from '../components/report-doc';
 
@@ -763,10 +768,10 @@ const auth = useAuthStore();
 const myProjects = ref<any[]>([]);
 const route = useRoute();
 
-// ---- 大 tab（日报 / 周报 / PBC / 日报看板 / 工时统计）----
-// 前三个 tab 直接驱动下面的 type（写卡内部仍按 DAILY/WEEKLY/PBC 分支渲染）；board/hours 内嵌日报看板与工时统计面板
-type TabKey = 'daily' | 'weekly' | 'pbc' | 'board' | 'hours' | 'schedule' | 'review';
-const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'board', 'hours', 'schedule', 'review'];
+// ---- 大 tab（日报 / 周报 / PBC / 任务 / 日报看板 / 工时统计）----
+// 前三个 tab 直接驱动下面的 type（写卡内部仍按 DAILY/WEEKLY/PBC 分支渲染）；board/hours 内嵌日报看板与工时统计面板；task 内嵌整个任务页
+type TabKey = 'daily' | 'weekly' | 'pbc' | 'task' | 'board' | 'hours' | 'schedule' | 'review';
+const TAB_KEYS: TabKey[] = ['daily', 'weekly', 'pbc', 'task', 'board', 'hours', 'schedule', 'review'];
 const TAB_TYPE: Record<string, 'DAILY' | 'WEEKLY' | 'PBC' | undefined> = {
   daily: 'DAILY',
   weekly: 'WEEKLY',
@@ -781,6 +786,12 @@ function normTab(v: any): TabKey {
 }
 
 const tab = ref<TabKey>(normTab(route.query.tab));
+
+/** 任务 tab 内嵌 TasksView 的初始子页：旧 /tasks?tab=xxx 由路由转成 ?ttab=xxx 带进来 */
+const embeddedTaskTab = computed(() => {
+  const s = String(route.query.ttab ?? '');
+  return s === 'board' || s === 'myday' || s === 'overview' ? s : undefined;
+});
 
 const type = ref<'DAILY' | 'WEEKLY' | 'PBC'>(TAB_TYPE[tab.value] ?? 'DAILY');
 
