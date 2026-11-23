@@ -36,6 +36,9 @@ export interface ProjectCreatePayload {
   skipRequirementDoc?: boolean; // 创建人确认「本项目确定不需要需求文档」
 }
 
+/** 合法纪要类型（PROGRESS=项目进度 / REPORT=汇报内容 / NOTE=项目备注）；前端 chips 与此保持一致 */
+const NOTE_KINDS = ['PROGRESS', 'REPORT', 'NOTE'];
+
 /** 保密协议默认正文（首次使用时落为 v1；管理员可在系统设置里改写，改写即升版本号） */
 const NDA_DEFAULT = `# 项目保密协议
 
@@ -574,6 +577,288 @@ export class ProjectsService {
       read: read.map((u) => ({ id: u.id, name: u.name, avatar: u.avatar })),
       unread: unread.map((u) => ({ id: u.id, name: u.name, avatar: u.avatar })),
     };
+  }
+
+  // ========== 项目纪要（项目进度/汇报内容/项目备注，规则旁的轻量信息发布） ==========
+
+  /** 发布纪要：项目成员/负责人/系统管理员均可（保密项目须先签协议，复用规则查看校验） */
+  private async assertNotePoster(projectId: string, userId: string, role: string) {
+    if (role === Role.ADMIN) return;
+    await this.assertRuleViewer(projectId, userId, role);
+  }
+
+  /** 纪要管理权（编辑/删除）：本人、系统管理员或项目负责人 */
+  private async canManageNote(noteProjectId: string, noteAuthorId: string, userId: string, role: string) {
+    if (role === Role.ADMIN || noteAuthorId === userId) return true;
+    const project = await this.prisma.project.findUnique({
+      where: { id: noteProjectId },
+      select: { ownerId: true, members: { where: { userId, role: 'OWNER' }, select: { id: true } } },
+    });
+    return !!project && (project.ownerId === userId || project.members.length > 0);
+  }
+
+  /** 发布纪要（必填：类型/标题/正文；落库后给除发布人外的项目成员发一条站内信，失败不影响发布） */
+  async createNote(userId: string, role: string, projectId: string, data: { kind?: string; title?: string; content?: string }) {
+    await this.assertNotePoster(projectId, userId, role);
+    const kind = String(data.kind ?? 'NOTE').trim().toUpperCase();
+    if (!NOTE_KINDS.includes(kind)) throw new BadRequestException('纪要类型无效');
+    const title = String(data.title ?? '').trim();
+    const content = String(data.content ?? '').trim();
+    if (!title) throw new BadRequestException('请填写纪要标题');
+    if (content.length < 2) throw new BadRequestException('纪要正文太短');
+    const { projectName, roster } = await this.ruleAudience(projectId);
+    const note = await this.prisma.projectNote.create({
+      data: { projectId, kind, title, content, createdById: userId },
+      include: { createdBy: { select: { id: true, name: true, avatar: true } } },
+    });
+    const kindLabel = kind === 'PROGRESS' ? '项目进度' : kind === 'REPORT' ? '汇报内容' : '项目备注';
+    const targets = roster.filter((id) => id !== userId);
+    let notified = 0;
+    try {
+      await this.notifications.createMany(targets, {
+        type: NotificationType.ANNOUNCEMENT,
+        title: `《${projectName}》${kindLabel}：${title}`,
+        content: '请进入项目页「项目纪要」查看详情。',
+        link: `/projects/${projectId}`,
+      });
+      notified = targets.length;
+    } catch (e) {
+      this.logger.warn(`纪要站内信发送失败 note=${note.id}: ${(e as Error).message}`);
+    }
+    return { ok: true, notified, note: this.flatNote(note, userId, role === Role.ADMIN) };
+  }
+
+  /** 某项目纪要列表（时间倒序 + 各类型计数 + 当前用户可管理标记） */
+  async listNotes(projectId: string, userId: string, role: string) {
+    await this.assertRuleViewer(projectId, userId, role);
+    const [rows, project] = await Promise.all([
+      this.prisma.projectNote.findMany({
+        where: { projectId },
+        orderBy: { publishedAt: 'desc' },
+        include: { createdBy: { select: { id: true, name: true, avatar: true } } },
+      }),
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { ownerId: true, members: { where: { userId, role: 'OWNER' }, select: { id: true } } },
+      }),
+    ]);
+    const amManager = role === Role.ADMIN || (!!project && (project.ownerId === userId || project.members.length > 0));
+    const notes = rows.map((n) => this.flatNote(n, userId, amManager));
+    const counts = { PROGRESS: 0, REPORT: 0, NOTE: 0 } as Record<string, number>;
+    for (const n of rows) counts[n.kind] = (counts[n.kind] ?? 0) + 1;
+    return { ok: true, total: rows.length, counts, notes };
+  }
+
+  /** 编辑纪要（本人/负责人/管理员；只更新正文与标题，updatedAt 记录修订时间） */
+  async updateNote(userId: string, role: string, noteId: string, data: { title?: string; content?: string }) {
+    const note = await this.prisma.projectNote.findUnique({ where: { id: noteId }, select: { id: true, projectId: true, createdById: true } });
+    if (!note) throw new NotFoundException('纪要不存在');
+    if (!(await this.canManageNote(note.projectId, note.createdById, userId, role))) {
+      throw new ForbiddenException('仅本人、项目负责人或系统管理员可编辑该纪要');
+    }
+    const title = String(data.title ?? '').trim();
+    const content = String(data.content ?? '').trim();
+    if (!title) throw new BadRequestException('请填写纪要标题');
+    if (content.length < 2) throw new BadRequestException('纪要正文太短');
+    const updated = await this.prisma.projectNote.update({
+      where: { id: noteId },
+      data: { title, content, updatedAt: new Date() },
+      include: { createdBy: { select: { id: true, name: true, avatar: true } } },
+    });
+    return { ok: true, note: this.flatNote(updated, userId, true) };
+  }
+
+  /** 删除纪要（本人/负责人/管理员） */
+  async deleteNote(userId: string, role: string, noteId: string) {
+    const note = await this.prisma.projectNote.findUnique({ where: { id: noteId }, select: { id: true, projectId: true, createdById: true } });
+    if (!note) throw new NotFoundException('纪要不存在');
+    if (!(await this.canManageNote(note.projectId, note.createdById, userId, role))) {
+      throw new ForbiddenException('仅本人、项目负责人或系统管理员可删除该纪要');
+    }
+    await this.prisma.projectNote.delete({ where: { id: noteId } });
+    return { ok: true };
+  }
+
+  /** 纪要平化：附作者信息与「我可管理」标记（前端控制编辑/删除按钮显隐） */
+  private flatNote(n: any, userId: string, amManager: boolean) {
+    return {
+      id: n.id,
+      kind: n.kind,
+      title: n.title,
+      content: n.content,
+      publishedAt: n.publishedAt,
+      updatedAt: n.updatedAt,
+      author: n.createdBy ? { id: n.createdBy.id, name: n.createdBy.name, avatar: n.createdBy.avatar } : null,
+      mine: n.createdById === userId,
+      canManage: amManager || n.createdById === userId,
+    };
+  }
+
+  // ========== 项目群（每个项目一个成员聊天群） ==========
+
+  /** 消息平化：附发送者/引用摘要/是否本人/能否删除（本人 2 分钟内或负责人/管理员） */
+  private flatChatMessage(n: any, userId: string, amManager: boolean) {
+    const canDelete =
+      amManager ||
+      (n.senderId === userId && !n.deletedAt && Date.now() - new Date(n.createdAt).getTime() <= 2 * 60 * 1000);
+    return {
+      id: n.id,
+      content: n.content,
+      createdAt: n.createdAt,
+      deletedAt: n.deletedAt,
+      sender: n.sender ? { id: n.sender.id, name: n.sender.name, avatar: n.sender.avatar } : null,
+      mine: n.senderId === userId,
+      canDelete,
+      replyTo: n.replyTo
+        ? {
+            id: n.replyTo.id,
+            senderName: n.replyTo.sender?.name || '—',
+            content: String(n.replyTo.content || '').slice(0, 60),
+          }
+        : null,
+    };
+  }
+
+  /** 群成员与我的管理权（负责人/管理员） */
+  private async chatAudience(projectId: string, userId: string, role: string) {
+    const [project, users] = await Promise.all([
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { ownerId: true, members: { where: { userId, role: 'OWNER' }, select: { id: true } } },
+      }),
+      this.prisma.project
+        .findUnique({
+          where: { id: projectId },
+          select: { ownerId: true, members: { select: { userId: true } } },
+        })
+        .then(async (p) => {
+          if (!p) return [];
+          const ids = [...new Set([p.ownerId, ...p.members.map((m) => m.userId)])];
+          return this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, avatar: true } });
+        }),
+    ]);
+    const amManager = role === Role.ADMIN || (!!project && (project.ownerId === userId || project.members.length > 0));
+    return { members: users, amManager };
+  }
+
+  /**
+   * 群消息列表（权限同项目可见性 + 保密协议）：
+   * - ?afterId=xx 增量拉新（返回晚于该消息的消息，正序）
+   * - ?beforeId=xx 历史分页（返回早于该消息的最新 limit 条，正序）
+   * 响应附成员名单、未读数与当前用户管理权
+   */
+  async chatList(
+    userId: string,
+    role: string,
+    projectId: string,
+    opts: { afterId?: string; beforeId?: string; limit?: number },
+  ) {
+    await this.assertRuleViewer(projectId, userId, role);
+    const limit = Math.min(Math.max(Math.round(Number(opts.limit) || 50), 1), 100);
+    const where: any = { projectId };
+    for (const [key, op] of [['afterId', 'gt'], ['beforeId', 'lt']] as const) {
+      const anchorId = (opts as any)[key];
+      if (!anchorId) continue;
+      const anchor = await this.prisma.projectChatMessage.findUnique({ where: { id: anchorId }, select: { createdAt: true } });
+      if (!anchor) throw new NotFoundException('锚点消息不存在');
+      where.createdAt = { ...(where.createdAt ?? {}), [op]: anchor.createdAt };
+    }
+    const [rows, audience, myRead] = await Promise.all([
+      this.prisma.projectChatMessage.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        include: {
+          sender: { select: { id: true, name: true, avatar: true } },
+          replyTo: { include: { sender: { select: { name: true } } } },
+        },
+      }),
+      this.chatAudience(projectId, userId, role),
+      this.prisma.projectChatRead.findUnique({
+        where: { projectId_userId: { projectId, userId } },
+        select: { lastReadAt: true },
+      }),
+    ]);
+    const unreadWhere: any = { projectId, deletedAt: null, senderId: { not: userId } };
+    if (myRead) unreadWhere.createdAt = { gt: myRead.lastReadAt };
+    const unread = await this.prisma.projectChatMessage.count({ where: unreadWhere });
+    return {
+      ok: true,
+      messages: rows.reverse().map((n) => this.flatChatMessage(n, userId, audience.amManager)),
+      members: audience.members,
+      amManager: audience.amManager,
+      unread,
+    };
+  }
+
+  /** 发送群消息（1~1000 字；replyTo 须为本项目消息） */
+  async chatSend(userId: string, role: string, projectId: string, data: { content?: string; replyToId?: string }) {
+    await this.assertRuleViewer(projectId, userId, role);
+    const content = String(data.content ?? '').trim();
+    if (!content) throw new BadRequestException('消息内容不能为空');
+    if (content.length > 1000) throw new BadRequestException('消息最长 1000 字');
+    let replyToId: string | null = null;
+    if (data.replyToId) {
+      const anchor = await this.prisma.projectChatMessage.findUnique({
+        where: { id: data.replyToId },
+        select: { id: true, projectId: true },
+      });
+      if (!anchor || anchor.projectId !== projectId) throw new BadRequestException('引用的消息不存在');
+      replyToId = anchor.id;
+    }
+    const msg = await this.prisma.projectChatMessage.create({
+      data: { projectId, senderId: userId, content, replyToId },
+      include: { sender: { select: { id: true, name: true, avatar: true } } },
+    });
+    return { ok: true, message: this.flatChatMessage(msg, userId, false) };
+  }
+
+  /** 撤回消息：本人 2 分钟内；负责人/管理员可删任意（置 deletedAt 清空内容保留占位） */
+  async chatDelete(userId: string, role: string, messageId: string) {
+    const msg = await this.prisma.projectChatMessage.findUnique({
+      where: { id: messageId },
+      select: { id: true, projectId: true, senderId: true, deletedAt: true, createdAt: true },
+    });
+    if (!msg) throw new NotFoundException('消息不存在');
+    if (msg.deletedAt) return { ok: true, already: true };
+    const mineFresh = msg.senderId === userId && Date.now() - msg.createdAt.getTime() <= 2 * 60 * 1000;
+    if (!mineFresh) {
+      const project = await this.prisma.project.findUnique({
+        where: { id: msg.projectId },
+        select: { ownerId: true, members: { where: { userId, role: 'OWNER' }, select: { id: true } } },
+      });
+      const amManager = role === Role.ADMIN || (!!project && (project.ownerId === userId || project.members.length > 0));
+      if (!amManager) throw new ForbiddenException('仅可在发送后 2 分钟内撤回自己的消息');
+    }
+    await this.prisma.projectChatMessage.update({
+      where: { id: messageId },
+      data: { content: '', deletedAt: new Date() },
+    });
+    return { ok: true };
+  }
+
+  /** 上报已读位置（打开抽屉/收到新消息时调用；幂等 upsert） */
+  async chatRead(userId: string, role: string, projectId: string) {
+    await this.assertRuleViewer(projectId, userId, role);
+    await this.prisma.projectChatRead.upsert({
+      where: { projectId_userId: { projectId, userId } },
+      update: { lastReadAt: new Date() },
+      create: { projectId, userId, lastReadAt: new Date() },
+    });
+    return { ok: true };
+  }
+
+  /** 我的未读数（详情页红点） */
+  async chatUnread(userId: string, role: string, projectId: string) {
+    await this.assertRuleViewer(projectId, userId, role);
+    const myRead = await this.prisma.projectChatRead.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+      select: { lastReadAt: true },
+    });
+    const where: any = { projectId, deletedAt: null, senderId: { not: userId } };
+    if (myRead) where.createdAt = { gt: myRead.lastReadAt };
+    const unread = await this.prisma.projectChatMessage.count({ where });
+    return { ok: true, unread };
   }
 
   async create(

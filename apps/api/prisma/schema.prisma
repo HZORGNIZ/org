@@ -320,6 +320,9 @@ model User {
   ndaTemplates     NdaVersion[]       @relation("NdaAuthor") // 我（管理员）编写过的协议版本
   rulesCreated     ProjectRule[]      @relation("RuleAuthor") // 我发布过的项目规则
   ruleAcks         ProjectRuleAck[]   @relation("RuleAckUser") // 我点过的项目规则已阅
+  notesCreated     ProjectNote[]      @relation("NoteAuthor") // 我发布过的项目纪要
+  chatMessagesSent ProjectChatMessage[] @relation("ChatSender") // 我在项目群里发过的消息
+  chatReads        ProjectChatRead[]  @relation("ChatReader") // 我的群已读位置
   invOwnedServers  InventoryServer[]   @relation("InventoryServerOwner") // 我负责的服务器（资源盘点）
   invOwnedDomains  InventoryDomain[]   @relation("InventoryDomainOwner") // 我负责的域名（资源盘点）
   invOwnedProjects ProjectInventory[]  @relation("InventoryOwner") // 我负责的项目盘点条目
@@ -414,6 +417,9 @@ model Project {
   meetings   Meeting[] // 关联本项目的会议（会议待办落地任务时默认归属）
   ndaSigns   NdaSign[] // 保密项目的协议签署记录
   rules      ProjectRule[] // 项目规则（负责人/管理员发布，成员需已阅）
+  notes      ProjectNote[] // 项目纪要（进度/汇报/备注，成员可发）
+  chatMessages ProjectChatMessage[] // 项目群消息（成员可聊）
+  chatReads  ProjectChatRead[] // 项目群已读位置
   inventories ProjectInventory[] // 关联的资源盘点条目（可空，仅管理员维护）
   hardware  ProjectHardware[] // 硬件资产/元件清单（项目设置开启 hasHardware 后启用）
   github    ProjectGithub[] // GitHub 仓库信息（开启 hasGithub 后启用；仅成员/负责人/部门负责人/管理员可见）
@@ -648,6 +654,58 @@ model ProjectRuleAck {
   user User        @relation("RuleAckUser", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([ruleId, userId])
+  @@index([userId])
+}
+
+// 项目纪要：项目规则旁的轻量信息发布（项目进度/汇报内容/项目备注）。
+// 权限：项目负责人/成员/系统管理员均可发；编辑/删除限本人或负责人/管理员。按发布时间倒序展示。
+model ProjectNote {
+  id          String    @id @default(cuid())
+  projectId   String
+  kind        String    @default("NOTE") // PROGRESS=项目进度 / REPORT=汇报内容 / NOTE=项目备注
+  title       String
+  content     String // Markdown 正文
+  createdById String
+  publishedAt DateTime  @default(now())
+  updatedAt   DateTime?
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("NoteAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId, publishedAt])
+}
+
+// ========== 项目群（每个项目一个成员聊天群） ==========
+
+// 项目群消息：项目成员/负责人/管理员可发；支持引用回复；本人 2 分钟内可撤回（负责人/管理员可删任意）
+model ProjectChatMessage {
+  id        String    @id @default(cuid())
+  projectId String
+  senderId  String
+  content   String // 纯文本（保留换行）
+  replyToId String? // 引用的消息 id
+  createdAt DateTime  @default(now())
+  deletedAt DateTime? // 撤回/删除时间（置空内容保留占位）
+
+  project  Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sender   User               @relation("ChatSender", fields: [senderId], references: [id], onDelete: Cascade)
+  replyTo  ProjectChatMessage? @relation("ChatReply", fields: [replyToId], references: [id], onDelete: NoAction, onUpdate: Cascade)
+  replies  ProjectChatMessage[] @relation("ChatReply")
+
+  @@index([projectId, createdAt])
+}
+
+// 已读位置：每人每项目记一个时间戳，未读数 = 之后的新消息条数
+model ProjectChatRead {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  lastReadAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation("ChatReader", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
   @@index([userId])
 }
 

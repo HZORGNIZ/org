@@ -371,6 +371,86 @@ export class ProjectsController {
     return this.projects.ackRule(user.id, user.role, ruleId, body?.note);
   }
 
+  // ---- 项目群（成员聊天；权限同项目可见性，保密项目须先签协议）----
+
+  /** 群消息列表：?afterId= 增量拉新 / ?beforeId= 历史分页 / ?limit= 1~100 默认 50 */
+  @Get(':id/chat')
+  chatList(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Query('afterId') afterId?: string,
+    @Query('beforeId') beforeId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.projects.chatList(user.id, user.role, id, {
+      afterId: afterId || undefined,
+      beforeId: beforeId || undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  /** 发送群消息（content 必填 1~1000 字；replyToId 可选引用） */
+  @Post(':id/chat')
+  chatSend(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() body: { content?: string; replyToId?: string },
+  ) {
+    return this.projects.chatSend(user.id, user.role, id, body ?? {});
+  }
+
+  /** 我的未读数（红点） */
+  @Get(':id/chat/unread')
+  chatUnread(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.chatUnread(user.id, user.role, id);
+  }
+
+  /** 上报已读位置（打开抽屉时调用） */
+  @Post(':id/chat/read')
+  chatRead(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.chatRead(user.id, user.role, id);
+  }
+
+  /** 撤回消息（本人 2 分钟内；负责人/管理员可删任意） */
+  @Delete('chat/:messageId')
+  chatDelete(@Param('messageId') messageId: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.chatDelete(user.id, user.role, messageId);
+  }
+
+  // ---- 项目纪要（项目进度/汇报内容/项目备注；成员/负责人/管理员均可发）----
+
+  /** 发布纪要（必填 kind=PROGRESS|REPORT|NOTE + title + content） */
+  @Post(':id/notes')
+  createNote(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() body: { kind?: string; title?: string; content?: string },
+  ) {
+    return this.projects.createNote(user.id, user.role, id, body ?? {});
+  }
+
+  /** 纪要列表：时间倒序 + 各类型计数 + 当前用户可管理标记 */
+  @Get(':id/notes')
+  listNotes(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.listNotes(id, user.id, user.role);
+  }
+
+  /** 编辑纪要（本人/项目负责人/系统管理员） */
+  @Put('notes/:noteId')
+  updateNote(
+    @Param('noteId') noteId: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() body: { title?: string; content?: string },
+  ) {
+    return this.projects.updateNote(user.id, user.role, noteId, body ?? {});
+  }
+
+  /** 删除纪要（本人/项目负责人/系统管理员） */
+  @Delete('notes/:noteId')
+  deleteNote(@Param('noteId') noteId: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.projects.deleteNote(user.id, user.role, noteId);
+  }
+
   /** 项目审批历史（时间倒序）；owner/approver/ADMIN 可查 */
   @Get(':id/approvals')
   approvals(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
