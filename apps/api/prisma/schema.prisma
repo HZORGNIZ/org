@@ -258,6 +258,8 @@ model User {
   agentSessions AgentSession[] // 管理者 Agent 悬浮窗会话历史
   bookingAsOwner MeetingBooking[] @relation("BookingOwner") // 别人约我（我是被约的老师）
   bookingAsRequester MeetingBooking[] @relation("BookingRequester") // 我发起的预约
+  twinAsOwner TwinMessage[] @relation("TwinMessageOwner") // 别人通过我的 AI 分身留给我的留言
+  twinAsRequester TwinMessage[] @relation("TwinMessageRequester") // 我通过老师分身留下的留言
   timeSlots UserTimeSlot[] // 一次性可约/不可约时段（老师临时调整）
   personalEvents PersonalEvent[] // 我的日程：个人安排的事项与开放可约时段
 
@@ -1483,6 +1485,26 @@ model MeetingBooking {
   @@index([ownerId, startAt])
   @@index([requesterId, startAt])
   @@index([status])
+}
+
+// 分身留言：成员跟老师 AI 分身聊时留下的、需要老师本人看的正式留言
+// 与 MeetingBooking 区分：留言不带时间，只是「把话正式递到老师面前」；老师打开自己的分身对话即视为已读
+model TwinMessage {
+  id          String    @id @default(cuid())
+  ownerId     String    // 留言给哪位老师
+  requesterId String    // 留言人
+  botKey      String    @default("") // 经由哪个分身（twin-shushu / twin-yangli）
+  content     String    // 留言正文
+  status      String    @default("UNREAD") // UNREAD=老师未读 / READ=已读
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner     User @relation("TwinMessageOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  requester User @relation("TwinMessageRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, status, createdAt])
+  @@index([requesterId, createdAt])
 }
 
 // 个人日程事件：「我的日程」时间轴里自己安排的事项（这个时间我要做什么）

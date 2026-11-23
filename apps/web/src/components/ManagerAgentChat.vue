@@ -335,6 +335,7 @@ const ACTION_TITLES: Record<string, string> = {
   BOOKING_DECIDE: '审批沟通预约（结果通知对方并推送到项目PUSH群）',
   EVENT_CREATE: '添加日程（我的日程）',
   EVENT_DELETE: '删除日程（我的日程）',
+  TWIN_MESSAGE_SEND: '给老师留言（老师会收到钉钉提醒，打开自己的分身对话可查看）',
 };
 
 /** 输入框上方常驻快捷问：按引导档三套（全站/项目/员工） */
@@ -943,8 +944,13 @@ function actionRows(a: any) {
     push('日期', `${a.date}`);
     push('时段', a.range);
     push('类型', a.kindCn);
-    push('内容', a.title);
-  }
+    push('内容', a.title);
+  } else if (a.kind === 'TWIN_MESSAGE_SEND') {
+    push('收件人', a.ownerName ? `${a.ownerName}老师` : '-');
+    push('留言人', a.requesterName);
+    push('内容', a.content);
+    push('说明', a.hint ?? '确认后老师会收到钉钉私聊与站内信提醒');
+  }
   return rows;
 }
 
@@ -1074,9 +1080,12 @@ async function confirmAction(m: AgentMsg) {
       const r: any = await agentApi.createEvent({ date: a.date, startMin: a.startMin, endMin: a.endMin, kind: a.kindCode, title: a.title, note: a.note ?? undefined, source: 'agent' });
       if (r?.warning) ElMessage.warning(r.warning);
       resultLabel = `已在「我的日程」${a.date} ${a.range} 添加${a.kindCn}：${a.title}`;
-    } else if (a.kind === 'EVENT_DELETE') {
-      await agentApi.deleteEvent(a.eventId);
-      resultLabel = `已删除日程：${a.date} ${a.range} ${a.title}`;
+    } else if (a.kind === 'EVENT_DELETE') {
+      await agentApi.deleteEvent(a.eventId);
+      resultLabel = `已删除日程：${a.date} ${a.range} ${a.title}`;
+    } else if (a.kind === 'TWIN_MESSAGE_SEND') {
+      await agentApi.sendTwinMessage({ ownerId: a.ownerId, content: a.content, botKey: a.botKey ?? undefined });
+      resultLabel = `已把留言转给 ${a.ownerName}老师（TA 会收到钉钉提醒，打开自己的分身对话可查看）`;
     } else {
       throw new Error('不支持的操作类型');
     }

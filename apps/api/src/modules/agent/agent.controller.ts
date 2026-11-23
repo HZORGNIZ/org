@@ -147,6 +147,26 @@ export class AgentController {
     return this.agent.decideBooking(me, id, body ?? {});
   }
 
+  // ---- 分身留言（TWIN_MESSAGE_SEND 确认卡执行用）：成员经老师分身留言 → 老师钉钉/站内信提醒 ----
+
+  /** 留言列表：老师=我收到的（含未读数），成员=我发出的 */
+  @Get('twin-messages')
+  listTwinMessages(@CurrentUser() me: CurrentUserPayload) {
+    return this.agent.listTwinMessages(me);
+  }
+
+  /** 发留言：建 TwinMessage + 钉钉私聊/站内信通知老师 */
+  @Post('twin-messages')
+  createTwinMessage(@CurrentUser() me: CurrentUserPayload, @Body() body: { ownerId?: string; content?: string; botKey?: string }) {
+    return this.agent.createTwinMessage(me, body ?? {});
+  }
+
+  /** 标记留言已读：只有收件老师本人可标 */
+  @Post('twin-messages/:id/read')
+  markTwinMessageRead(@CurrentUser() me: CurrentUserPayload, @Param('id') id: string) {
+    return this.agent.markTwinMessageRead(me, id);
+  }
+
   /** 老师登记一次性时段（临时可约/不可约）：只能写自己的 */
   @Post('time-slots')
   setTimeSlot(

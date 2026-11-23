@@ -475,6 +475,18 @@ export const agentApi = {
   /** 老师审批预约：approve=true 批准 / false 驳回（可附原因），结果通知发起人 */
   decideBooking: (id: string, data: { approve: boolean; note?: string }) =>
     api.post<{ ok: boolean; status: string }>(`/agent/bookings/${id}/decide`, data),
+  /** 分身留言列表：老师=我收到的（含未读数 inbox.unreadCount），成员=我发出的 */
+  listTwinMessages: () =>
+    api.get<{
+      inbox: { id: string; content: string; botKey: string; status: string; time: string; who: string }[];
+      sent: { id: string; content: string; botKey: string; status: string; time: string; who: string }[];
+      unreadCount: number;
+    }>('/agent/twin-messages'),
+  /** 发分身留言（老师分身确认卡执行用）：建记录并钉钉私聊/站内信通知老师 */
+  sendTwinMessage: (data: { ownerId: string; content: string; botKey?: string }) =>
+    api.post<{ ok: boolean; id: string }>('/agent/twin-messages', data),
+  /** 标记分身留言已读：只有收件老师本人可标 */
+  markTwinMessageRead: (id: string) => api.post<{ ok: boolean; status: string }>(`/agent/twin-messages/${id}/read`),
   /** 老师登记一次性时段（临时可约/不可约），只能写自己的 */
   setTimeSlot: (data: { date: string; startMin: number | string; endMin: number | string; kind?: string; note?: string }) =>
     api.post<{ ok: boolean; id: string; date: string; range: string; kind: string }>('/agent/time-slots', data),
