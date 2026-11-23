@@ -310,6 +310,85 @@ export class ReportsService {
   }
 
   /**
+   * 日报周视图（周日历卡片墙）：from 归一到其所在北京自然周的周一，一次拉齐按天分组。
+   * days=7 默认（周视图）；28/42 用于月视图（多周连排）。口径与 dailyOverview 完全一致
+   * （项目=成员名册口径，不按 report.projectId 过滤），只查已交的日报（未交由前端按名册数显示空态）。
+   */
+  async dailyOverviewWeek(
+    me: { id: string; role: string },
+    opts: { from?: string; days?: string; projectId?: string; departmentId?: string },
+  ) {
+    const anchor = opts.from ? this.dayStartOf(opts.from) : this.dayStartOf(fmtBeijingDate(new Date()));
+    const monday = beijingMondayOf(Number.isNaN(anchor.getTime()) ? new Date() : anchor);
+    const dayCount = Math.min(Math.max(Number(opts.days) || 7, 1), 42);
+    const scope = await this.resolveViewUsers(me, opts);
+    const where: any = {
+      type: 'DAILY',
+      periodStart: { gte: monday, lt: new Date(monday.getTime() + dayCount * 86400000) },
+    };
+    if (!scope.all) where.ownerId = { in: scope.ids };
+    const reports: any[] = await this.prisma.report.findMany({
+      where,
+      include: {
+        owner: { select: { id: true, name: true, avatar: true, department: { select: { name: true } } } },
+        project: { select: { id: true, name: true } },
+      },
+      orderBy: { periodStart: 'asc' },
+    });
+    const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    const buckets = new Map<string, any[]>();
+    for (const r of reports) {
+      if (!r.ownerId) continue;
+      const key = fmtBeijingDate(r.periodStart);
+      const arr = buckets.get(key) ?? [];
+      arr.push({
+        userId: r.ownerId as string,
+        name: r.owner?.name ?? '未知',
+        avatar: r.owner?.avatar ?? null,
+        departmentName: r.owner?.department?.name ?? null,
+        projectName: r.project?.name ?? null,
+        hours: typeof r.hours === 'number' ? r.hours : null,
+        content: this.dailyBody(r),
+        submitted: true,
+        reportId: r.id,
+      });
+      buckets.set(key, arr);
+    }
+    const sortItems = (arr: any[]) =>
+      arr.sort((a, b) => {
+        const d = String(a.departmentName ?? '').localeCompare(String(b.departmentName ?? ''), 'zh-Hans-CN');
+        if (d) return d;
+        return String(a.name).localeCompare(String(b.name), 'zh-Hans-CN');
+      });
+    const todayKey = fmtBeijingDate(new Date());
+    const days: any[] = [];
+    for (let i = 0; i < dayCount; i++) {
+      const d = new Date(monday.getTime() + i * 86400000);
+      const key = fmtBeijingDate(d);
+      const items = sortItems(buckets.get(key) ?? []);
+      days.push({
+        date: key,
+        weekday: dayNames[i % 7],
+        isToday: key === todayKey,
+        isFuture: key > todayKey,
+        items,
+        hours: Math.round(items.reduce((s: number, x: any) => s + (typeof x.hours === 'number' ? x.hours : 0), 0) * 10) / 10,
+        submittedCount: items.length,
+        rosterCount: scope.all ? null : scope.ids.length,
+      });
+    }
+    return {
+      from: fmtBeijingDate(monday),
+      to: fmtBeijingDate(new Date(monday.getTime() + (dayCount - 1) * 86400000)),
+      dayCount,
+      scopeLabel: scope.scopeLabel,
+      days,
+      totalHours: Math.round(days.reduce((s: number, x: any) => s + x.hours, 0) * 10) / 10,
+      submittedCount: days.reduce((s: number, x: any) => s + x.submittedCount, 0),
+    };
+  }
+
+  /**
    * 某成员日报时间轴（按天倒序）：每天正文 + 当日工时，并给出区间累计工时。
    * 默认最近 30 天；仅本人、管理员或其可见范围内可看。
    */

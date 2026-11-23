@@ -107,6 +107,14 @@
       <el-tabs v-model="activeTab" class="pd-tabs">
         <el-tab-pane name="overview">
           <template #label>概览</template>
+      <!-- 即将召开的会议横幅：一进项目就能看到最近一场会议（点击直达会议详情） -->
+      <div v-if="nextMeeting" class="page-card next-meeting-banner" @click="openMeeting(nextMeeting.id)">
+        <span class="nm-dot"></span>
+        <span class="nm-label">即将召开</span>
+        <span class="nm-title">{{ nextMeeting.title }}</span>
+        <span class="muted">{{ fmt(nextMeeting.startAt, 'MM-DD HH:mm') }} · {{ nextMeeting.ownerName || '' }}</span>
+        <el-button text type="primary" size="small">会议详情 →</el-button>
+      </div>
       <div class="page-card rules-card">
         <div class="block-title-row">
           <span class="block-title">项目规则</span>
@@ -170,6 +178,50 @@
             </span>
           </div>
         </div>
+      </div>
+
+      <!-- 项目纪要（进度/汇报/备注）：规则旁的轻量信息发布，成员/负责人/管理员均可发，时间倒序可收起 -->
+      <div class="page-card notes-card" v-loading="noteLoading">
+        <div class="block-title-row">
+          <span class="block-title">项目纪要</span>
+          <span class="muted rules-meta">{{ notesTotal }} 条</span>
+          <span class="rules-ops">
+            <el-button v-if="canPostNote" text type="primary" size="small" @click="openNoteDialog(null)">＋ 发布纪要</el-button>
+            <el-button text size="small" @click="collapseAllNotes">收起全部</el-button>
+          </span>
+        </div>
+        <div class="note-chips">
+          <span class="note-chip" :class="{ on: noteFilter === 'ALL' }" @click="noteFilter = 'ALL'">全部 {{ notesTotal }}</span>
+          <span
+            v-for="k in NOTE_KINDS"
+            :key="k.key"
+            class="note-chip"
+            :class="{ on: noteFilter === k.key }"
+            @click="noteFilter = k.key"
+          >
+            {{ k.label }} {{ noteCounts[k.key] ?? 0 }}
+          </span>
+        </div>
+        <div v-if="!visibleNotes.length" class="muted rules-empty">
+          {{ canPostNote ? '还没有纪要，点右上角「＋ 发布纪要」记录第一条' : '项目里还没有纪要' }}
+        </div>
+        <div v-for="n in visibleNotes" :key="n.id" class="note-item" :class="{ open: !!noteExpanded[n.id] }">
+          <div class="note-head" @click="toggleNote(n.id)">
+            <el-tag size="small" :type="noteKindTag(n.kind)" effect="plain">{{ noteKindLabel(n.kind) }}</el-tag>
+            <span class="note-title">{{ n.title }}</span>
+            <span class="note-caret muted">{{ noteExpanded[n.id] ? '收起 ▴' : '展开 ▾' }}</span>
+          </div>
+          <div class="rule-by muted">
+            {{ n.author?.name || '—' }} 发布于 {{ fmt(n.publishedAt, 'YYYY-MM-DD HH:mm') }}
+            <template v-if="n.updatedAt"> · 修订于 {{ fmt(n.updatedAt, 'YYYY-MM-DD HH:mm') }}</template>
+          </div>
+          <div v-if="noteExpanded[n.id]" class="rule-body"><MarkdownView :content="n.content" /></div>
+          <div v-if="noteExpanded[n.id] && n.canManage" class="note-ops">
+            <el-button text size="small" @click="openNoteDialog(n)">编辑</el-button>
+            <el-button text size="small" type="danger" @click="removeNote(n)">删除</el-button>
+          </div>
+        </div>
+        <div v-if="hiddenNoteCount > 0" class="note-more" @click="noteLimit += 10">展开更早的 {{ hiddenNoteCount }} 条</div>
       </div>
 
         <div class="detail-grid" v-loading="loading">
@@ -363,9 +415,18 @@
 
       <el-tab-pane name="daily">
         <template #label>项目日报</template>
+        <!-- 快速写日报入口：与首页快速日报同一条数据（同日多次提交自动合并），写完本项目日报看板立即可见 -->
+        <div class="page-card report-entry-card">
+          <div class="block-title-row">
+            <span class="block-title">快速写日报</span>
+            <span class="muted">写完自动进入下方日报看板与统计，无需跳转其他页面</span>
+            <el-button type="primary" size="small" @click="openDailyCompose">＋ 写今日日报</el-button>
+          </div>
+        </div>
         <!-- 项目日报：本项目按日期聚合 / 按人员时间轴 / 工时排行（数据口径与「工作管理-日报看板」一致） -->
       <ProjectDailyPanel
         ref="dailyRef"
+        :key="dailyPanelKey"
         v-if="project?.id"
         :project-id="project.id"
         :members="displayMembers"
@@ -467,6 +528,40 @@
 
       <el-tab-pane name="meetings">
         <template #label>项目会议</template>
+      <!-- 会议周日历：会议按时间落在一周七列的格子里，一眼看清全周安排 -->
+      <div class="page-card meetings-card" v-loading="meetingsLoading">
+        <div class="block-title-row">
+          <span class="block-title">会议日历</span>
+          <div class="weekly-ops">
+            <el-button-group size="small">
+              <el-button @click="shiftCalWeek(-1)">上一周</el-button>
+              <el-button :type="calIsThisWeek ? 'primary' : ''" @click="calGoThisWeek">本周</el-button>
+              <el-button @click="shiftCalWeek(1)">下一周</el-button>
+            </el-button-group>
+          </div>
+        </div>
+        <div class="cal-week">
+          <div v-for="c in calCols" :key="c.key" class="cal-col" :class="{ 'is-today': c.isToday }">
+            <div class="cal-col-hd" :class="{ today: c.isToday }">{{ c.label }}</div>
+            <div class="cal-col-body">
+              <div
+                v-for="(m, i) in c.meetings"
+                :key="m.id + '-' + i"
+                class="cal-block"
+                :class="{ 'is-done': m.status === 'DONE' }"
+                :style="calBlockStyle(m)"
+                :title="`${fmt(m.startAt, 'MM-DD HH:mm')} ${m.title}`"
+                @click="openMeeting(m.id)"
+              >
+                <div class="cal-block-t ellipsis">{{ m.title }}</div>
+                <div class="cal-block-time">{{ fmt(m.startAt, 'HH:mm') }}–{{ fmt(m.endAt ?? m.startAt, 'HH:mm') }}</div>
+              </div>
+              <div v-if="!c.meetings.length" class="cal-empty">—</div>
+            </div>
+          </div>
+        </div>
+        <div class="muted cal-tip">点击色块查看会议详情；历史会议全量展示，待开会议展示最近 3 场（全部会议在「会议」页查看）</div>
+      </div>
       <!-- 项目会议：已开始的会议按日期倒序列出（日期 + 主题），点击打开会议详情；右上角为发起项目会议入口 -->
       <div class="page-card meetings-card" v-loading="meetingsLoading">
         <div class="block-title-row">
@@ -520,6 +615,7 @@
               就绪 <b :class="weeklyReadinessClass">{{ weekly.readiness.submitted }}/{{ weekly.readiness.total }}</b>
             </span>
             <el-button size="small" text type="primary" :loading="weeklySummarizing" @click="genWeeklySummary">{{ weeklySummary ? '重新总结' : 'AI 总结' }}</el-button>
+            <el-button size="small" type="primary" plain @click="openWeeklyCompose">写本周周报</el-button>
             <el-button size="small" type="primary" @click="openWeeklyReport">查看完整项目周报</el-button>
           </div>
         </div>
@@ -530,6 +626,31 @@
         </ul>
         <div v-if="weeklyErr" class="muted weekly-err">{{ weeklyErr }}</div>
         <div v-else-if="!weeklySummary" class="muted weekly-tip">点「AI 总结」由 AI 汇总本周全员周报（总览/进展/下周/风险/需关注）；「查看完整项目周报」阅读每人的「姓名·部门·内容」。</div>
+      </div>
+      <!-- 成员周报卡片墙：按周切换，每张卡片一位成员，点开看全文 -->
+      <div class="page-card weekly-card">
+        <div class="block-title-row">
+          <span class="block-title">成员周报</span>
+          <div class="weekly-ops">
+            <el-button-group size="small">
+              <el-button @click="shiftWeekReport(-1)">上一周</el-button>
+              <el-button :type="weekReportIsCurrent ? 'primary' : ''" @click="pickWeekReportToday">本周</el-button>
+              <el-button @click="shiftWeekReport(1)">下一周</el-button>
+            </el-button-group>
+          </div>
+        </div>
+        <div v-if="weekly" class="muted weekly-week">{{ weekly.weekLabel }}｜就绪 {{ weekly.readiness.submitted }}/{{ weekly.readiness.total }}{{ weekly.readiness.missing ? ` · ${weekly.readiness.missing} 人未交` : '' }}</div>
+        <div v-loading="weeklyLoading" class="wreport-grid">
+          <div v-for="s in weekly?.sections ?? []" :key="s.userId" class="wreport-card" :class="{ 'is-miss': !s.submitted }" @click="openWReport(s)">
+            <div class="wreport-head">
+              <span class="wreport-name">{{ s.name }}</span>
+              <span class="wreport-tag" :class="'r-' + s.roleTag">{{ wroleCn(s.roleTag) }}</span>
+              <span v-if="!s.submitted" class="wreport-miss">未交</span>
+            </div>
+            <div class="wreport-body">{{ wreportBrief(s.content) }}</div>
+          </div>
+          <div v-if="!(weekly?.sections ?? []).length" class="muted doc-empty">该周还没有成员提交周报</div>
+        </div>
       </div>
       <!-- 本周文档：按周归组的成员上传文档（与文档中心同一数据源，可切历史周次） -->
       <div class="page-card weekly-card">
@@ -704,6 +825,40 @@
         <el-button size="small" @click="ruleDialogVisible = false">取消</el-button>
         <el-button size="small" type="primary" :loading="ruleSaving" @click="saveRule">
           {{ ruleEditing ? '保存修订' : '发布并通知成员' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 发布 / 编辑项目纪要弹窗（项目成员/负责人/管理员均可发；类型必选） -->
+    <el-dialog
+      v-model="noteDialogVisible"
+      :title="noteEditing ? '编辑纪要' : '发布项目纪要'"
+      width="min(96vw, 640px)"
+      top="6vh"
+      append-to-body
+      destroy-on-close
+    >
+      <el-form label-position="top" size="small">
+        <el-form-item label="类型">
+          <el-radio-group v-model="noteForm.kind">
+            <el-radio-button v-for="k in NOTE_KINDS" :key="k.key" :value="k.key">{{ k.label }}</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="标题">
+          <el-input v-model="noteForm.title" maxlength="60" placeholder="如「第三阶段联调完成，进入联测」" />
+        </el-form-item>
+        <el-form-item label="正文（支持 Markdown）">
+          <el-input v-model="noteForm.content" type="textarea" :rows="10" placeholder="纪要正文…" />
+        </el-form-item>
+        <div v-if="noteForm.content.trim()" class="rule-preview">
+          <div class="muted">预览</div>
+          <MarkdownView :content="noteForm.content" />
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="noteDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="noteSaving" @click="saveNote">
+          {{ noteEditing ? '保存修改' : '发布' }}
         </el-button>
       </template>
     </el-dialog>
@@ -898,8 +1053,77 @@
     <!-- 通用文档预览（PDF/图片/docx/文本/csv，在线文档走 Markdown 渲染） -->
     <DocPreview v-model="docPreviewVisible" :item="docPreviewItem" />
 
+    <!-- 快速写日报弹窗：与首页快速日报同一条数据，同日多次提交自动合并 -->
+    <el-dialog v-model="dailyComposeVisible" title="写今日日报" width="min(96vw, 560px)" append-to-body destroy-on-close>
+      <el-form label-position="top" size="small">
+        <el-form-item label="今天做了什么？">
+          <el-input
+            v-model="dailyForm.rawContent"
+            type="textarea"
+            :rows="8"
+            maxlength="2000"
+            show-word-limit
+            placeholder="如：完成登录模块联调；修复两个推送 bug；明天处理消息中心剩余用例…"
+          />
+        </el-form-item>
+        <el-form-item label="今日工时（小时，选填；不填沿用 AI 提取/已有工时）">
+          <el-input-number v-model="dailyForm.hours" :min="0.5" :max="24" :step="0.5" style="width: 140px" />
+        </el-form-item>
+        <div class="muted report-tip">提交后自动计入本项目日报看板与工时统计；同一天再次提交会追加合并，不会覆盖。</div>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="dailyComposeVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="dailySaving" :disabled="!dailyForm.rawContent.trim()" @click="submitDailyNow">提交日报</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 成员周报全文弹窗 -->
+    <el-dialog v-model="weekReportVisible" :title="weekReportItem ? `${weekReportItem.name} · 周报` : '周报'" width="min(96vw, 560px)" append-to-body>
+      <template v-if="weekReportItem">
+        <div class="wreport-meta">
+          <span v-if="weekReportItem.departmentName" class="muted">{{ weekReportItem.departmentName }}</span>
+          <span class="wreport-tag" :class="'r-' + weekReportItem.roleTag">{{ wroleCn(weekReportItem.roleTag) }}</span>
+          <span v-if="weekReportItem.source" class="muted">来源：{{ weekReportItem.source === 'AI' ? 'AI 修正' : '手写' }}</span>
+        </div>
+        <div class="wreport-full">{{ weekReportItem.content || '（无正文）' }}</div>
+      </template>
+    </el-dialog>
+
+    <!-- 写本周周报弹窗：三段式；可从本周日报一键生成草稿 -->
+    <el-dialog v-model="weeklyComposeVisible" title="写本周周报" width="min(96vw, 640px)" append-to-body destroy-on-close>
+      <el-form label-position="top" size="small">
+        <el-form-item>
+          <template #label>
+            <span>周报内容（建议三段式：<b>已完成的工作 / 下周计划 / 需要协调的问题</b>）</span>
+            <el-button text type="primary" size="small" :loading="weeklyDraftLoading" @click="genWeeklyDraft">从我的日报生成草稿</el-button>
+          </template>
+          <el-input
+            v-model="weeklyForm.rawContent"
+            type="textarea"
+            :rows="12"
+            maxlength="4000"
+            show-word-limit
+            placeholder="一、已完成的工作…&#10;二、下周计划…&#10;三、需要协调的问题…"
+          />
+        </el-form-item>
+        <div class="muted report-tip">提交即发布，自动汇集到本项目周报与公司周报；同一周再次提交会追加合并。</div>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="weeklyComposeVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="weeklySaving" :disabled="!weeklyForm.rawContent.trim()" @click="submitWeeklyNow">提交周报</el-button>
+      </template>
+    </el-dialog>
+
     <TaskFormDialog v-model="taskFormVisible" :default-project-id="project?.id" @saved="load" />
     <TaskDetailDrawer v-model="taskDrawer" :task-id="currentTaskId" @changed="load" />
+
+    <!-- 项目群：右上悬浮按钮（带未读红点）+ 右侧抽屉聊天窗 -->
+    <div v-if="project && !ndaLocked" class="pchat-fab" @click="openChat" title="项目群">
+      <span class="pchat-fab-ico">#</span>
+      <span class="pchat-fab-txt">项目群</span>
+      <span v-if="chatUnread > 0" class="pchat-badge">{{ chatUnread > 99 ? '99+' : chatUnread }}</span>
+    </div>
+    <ProjectChatDrawer v-model:visible="chatVisible" :project-id="String(project?.id ?? '')" :project-name="project?.name ?? ''" @sent="onChatSent" />
   </div>
 </template>
 
@@ -908,7 +1132,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import dayjs from 'dayjs';
-import { projectsApi, tasksApi, usersApi, departmentsApi, knowledgeApi, filesApi, documentsApi } from '../api';
+import { projectsApi, tasksApi, usersApi, departmentsApi, knowledgeApi, filesApi, documentsApi, reportsApi } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { TASK_PRIORITY, TASK_STATUS, fmt, isToday, updateDate } from '../utils/format';
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
@@ -916,6 +1140,7 @@ import { docTypeMeta, docTypeOptions } from '../utils/doc-types';
 import MarkdownView from '../components/MarkdownView.vue';
 import DocumentSpace from '../components/DocumentSpace.vue';
 import DocPreview from '../components/DocPreview.vue';
+import ProjectChatDrawer from '../components/ProjectChatDrawer.vue';
 import ConvertTaskDialog from '../components/ConvertTaskDialog.vue';
 import TaskFormDialog from '../components/TaskFormDialog.vue';
 import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
@@ -1007,6 +1232,47 @@ function createProjectMeeting() {
   router.push(`/meetings?create=PROJECT&projectId=${project.value.id}`);
 }
 
+// ---- 会议周日历：past+upcoming 合并按周摆进七列时间格子 ----
+const calStart = ref(mondayOfD(dayjs()).format('YYYY-MM-DD'));
+
+function shiftCalWeek(step: number) {
+  calStart.value = dayjs(calStart.value).add(step * 7, 'day').format('YYYY-MM-DD');
+}
+
+function calGoThisWeek() {
+  calStart.value = mondayOfD(dayjs()).format('YYYY-MM-DD');
+}
+
+const calIsThisWeek = computed(() => calStart.value === mondayOfD(dayjs()).format('YYYY-MM-DD'));
+
+const calCols = computed(() => {
+  const all = [...meetingUpcoming.value, ...meetingPast.value];
+  const start = dayjs(calStart.value);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = start.add(i, 'day');
+    const key = d.format('YYYY-MM-DD');
+    const ms = all
+      .filter((m: any) => String(m.startAt ?? '').slice(0, 10) === key)
+      .sort((a: any, b: any) => String(a.startAt).localeCompare(String(b.startAt)));
+    return {
+      key,
+      label: `周${'一二三四五六日'[i]} ${d.format('MM-DD')}`,
+      isToday: key === dayjs().format('YYYY-MM-DD'),
+      meetings: ms,
+    };
+  });
+});
+
+/** 色块定位：8:00–20:00 共 12 小时映射为列体高度，按开始/时长换算 top/height */
+function calBlockStyle(m: any) {
+  const s = dayjs(m.startAt);
+  const e = dayjs(m.endAt ?? m.startAt);
+  const top = Math.max(0, Math.min(96, ((s.hour() * 60 + s.minute() - 480) / 720) * 100));
+  const dur = Math.max(30, e.diff(s, 'minute'));
+  const h = Math.max(9, Math.min(100 - top, (dur / 720) * 100));
+  return { top: `${top}%`, height: `${h}%` };
+}
+
 // ---- 项目周报（需求 6 / F27：项目详情页卡片 + 完整聚合页入口）----
 const weekly = ref<any>(null);
 const weeklyLoading = ref(false);
@@ -1025,16 +1291,58 @@ async function loadWeekly() {
   if (!id) return;
   weeklyLoading.value = true;
   try {
-    const r: any = await projectsApi.weeklyReport(id);
+    const r: any = await projectsApi.weeklyReport(id, weeklyPeriodStart.value || undefined);
     weekly.value = r;
     weeklySummary.value = r?.summary || null;
     weeklyErr.value = '';
   } catch {
     weekly.value = null;
     weeklySummary.value = null;
-  } finally {
+  }   finally {
     weeklyLoading.value = false;
   }
+}
+
+// ---- 成员周报卡片墙（按周切换） ----
+const weeklyPeriodStart = ref('');
+const weekReportVisible = ref(false);
+const weekReportItem = ref<any>(null);
+
+/** 北京口径的周一：周报以自然周聚合，一切切换都落到周一 */
+function mondayOfD(d: dayjs.Dayjs) {
+  return d.subtract((d.day() + 6) % 7, 'day');
+}
+
+function shiftWeekReport(step: number) {
+  const base = weeklyPeriodStart.value ? dayjs(weeklyPeriodStart.value) : mondayOfD(dayjs());
+  weeklyPeriodStart.value = base.add(step * 7, 'day').format('YYYY-MM-DD');
+  loadWeekly();
+}
+
+function pickWeekReportToday() {
+  weeklyPeriodStart.value = '';
+  loadWeekly();
+}
+
+const weekReportIsCurrent = computed(
+  () => !weeklyPeriodStart.value || mondayOfD(dayjs(weeklyPeriodStart.value)).format('YYYY-MM-DD') === mondayOfD(dayjs()).format('YYYY-MM-DD'),
+);
+
+function wroleCn(tag: string) {
+  if (tag === 'DEPT_LEADER') return '部门负责人';
+  if (tag === 'PROJ_OWNER') return '项目负责人';
+  return '成员';
+}
+
+function wreportBrief(s: string) {
+  const t = String(s ?? '').replace(/[#*`>]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return '（未交或无正文）';
+  return t.length > 90 ? `${t.slice(0, 90)}…` : t;
+}
+
+function openWReport(s: any) {
+  weekReportItem.value = s;
+  weekReportVisible.value = true;
 }
 
 /** 卡片上直接“AI 总结”：强制刷新本周总结（缓存已存则重新读时自动命中） */
@@ -1208,6 +1516,236 @@ async function toggleRoster() {
     rosterOpen.value = false;
   } finally {
     rosterLoading.value = false;
+  }
+}
+
+// ---- 项目纪要（进度/汇报/备注） ----
+
+/** 纪要类型（与后端 NOTE_KINDS 保持一致）；tag 对应 el-tag 颜色 */
+const NOTE_KINDS = [
+  { key: 'PROGRESS', label: '项目进度', tag: 'primary' },
+  { key: 'REPORT', label: '汇报内容', tag: 'success' },
+  { key: 'NOTE', label: '项目备注', tag: 'warning' },
+] as const;
+type NoteFilter = 'ALL' | (typeof NOTE_KINDS)[number]['key'];
+
+function noteKindLabel(k: string) {
+  return NOTE_KINDS.find((x) => x.key === k)?.label ?? '项目备注';
+}
+function noteKindTag(k: string): 'primary' | 'success' | 'warning' {
+  return (NOTE_KINDS.find((x) => x.key === k)?.tag ?? 'warning') as 'primary' | 'success' | 'warning';
+}
+
+const notesList = ref<any[]>([]);
+const noteCounts = ref<Record<string, number>>({});
+const noteLoading = ref(false);
+const noteFilter = ref<NoteFilter>('ALL');
+const noteLimit = ref(3); // 默认只展示最近 3 条，其余折叠
+const noteExpanded = reactive<Record<string, boolean>>({});
+
+const notesTotal = computed(() => notesList.value.length);
+
+/** 发布纪要：所有项目成员 + 负责人 + 系统管理员（比规则宽松） */
+const canPostNote = computed(
+  () =>
+    !!auth.user &&
+    (auth.isAdmin ||
+      project.value?.ownerId === auth.user.id ||
+      (project.value?.members || []).some((m: any) => m.userId === auth.user!.id)),
+);
+
+const filteredNotes = computed(() =>
+  noteFilter.value === 'ALL' ? notesList.value : notesList.value.filter((n) => n.kind === noteFilter.value),
+);
+const visibleNotes = computed(() => filteredNotes.value.slice(0, noteLimit.value));
+const hiddenNoteCount = computed(() => Math.max(0, filteredNotes.value.length - noteLimit.value));
+
+function toggleNote(id: string) {
+  noteExpanded[id] = !noteExpanded[id];
+}
+
+/** 收起全部：所有已展开条目收起（重新展开任意一条即可） */
+function collapseAllNotes() {
+  for (const n of notesList.value) noteExpanded[n.id] = false;
+}
+
+/** 拉取纪要列表；默认展开最近 3 条，失败静默不阻断详情 */
+async function loadNotes() {
+  noteLoading.value = true;
+  try {
+    const r: any = await projectsApi.listNotes(String(route.params.id ?? ''));
+    notesList.value = r?.notes ?? [];
+    noteCounts.value = r?.counts ?? {};
+    noteLimit.value = 3;
+    for (const n of notesList.value) noteExpanded[n.id] = false;
+    for (const n of notesList.value.slice(0, 3)) noteExpanded[n.id] = true;
+  } catch {
+    /* 静默：纪要加载失败不影响项目详情其余部分 */
+  } finally {
+    noteLoading.value = false;
+  }
+}
+
+const noteDialogVisible = ref(false);
+const noteEditing = ref<any>(null);
+const noteSaving = ref(false);
+const noteForm = reactive<{ kind: NoteFilter; title: string; content: string }>({ kind: 'PROGRESS', title: '', content: '' });
+
+function openNoteDialog(n: any) {
+  noteEditing.value = n;
+  noteForm.kind = (n?.kind ?? 'PROGRESS') as NoteFilter;
+  noteForm.title = n?.title ?? '';
+  noteForm.content = n?.content ?? '';
+  noteDialogVisible.value = true;
+}
+
+async function saveNote() {
+  const title = noteForm.title.trim();
+  const content = noteForm.content.trim();
+  if (!title) {
+    ElMessage.warning('请填写纪要标题');
+    return;
+  }
+  if (content.length < 2) {
+    ElMessage.warning('纪要正文太短');
+    return;
+  }
+  noteSaving.value = true;
+  try {
+    if (noteEditing.value) {
+      await projectsApi.updateNote(noteEditing.value.id, { title, content });
+      ElMessage.success('已保存修改');
+    } else {
+      await projectsApi.createNote(String(route.params.id ?? ''), { kind: noteForm.kind, title, content });
+      ElMessage.success('纪要已发布');
+    }
+    noteDialogVisible.value = false;
+    await loadNotes();
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '保存失败');
+  } finally {
+    noteSaving.value = false;
+  }
+}
+
+async function removeNote(n: any) {
+  try {
+    await ElMessageBox.confirm(`确定删除纪要「${n.title}」？`, '删除纪要', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    });
+  } catch {
+    return;
+  }
+  try {
+    await projectsApi.deleteNote(n.id);
+    ElMessage.success('已删除');
+    await loadNotes();
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '删除失败');
+  }
+}
+
+// ---- 项目群（右侧抽屉聊天窗 + 未读红点） ----
+
+const chatVisible = ref(false);
+const chatUnread = ref(0);
+
+async function loadChatUnread() {
+  try {
+    const r: any = await projectsApi.chatUnread(String(route.params.id ?? ''));
+    chatUnread.value = r?.unread ?? 0;
+  } catch {
+    /* 静默 */
+  }
+}
+
+function openChat() {
+  chatUnread.value = 0;
+  chatVisible.value = true;
+}
+
+/** 抽屉里发了新消息/收到新消息后：清红点（打开抽屉时已上报已读） */
+function onChatSent() {
+  if (chatVisible.value) chatUnread.value = 0;
+}
+
+// ---- 一站式工作台：概览会议横幅 + 日报/周报写作入口 ----
+
+/** 最近一场即将召开的会议（loadMeetings 已随详情加载，这里只做展示） */
+const nextMeeting = computed(() => meetingUpcoming.value[0] ?? null);
+
+/** 快速写日报 */
+const dailyComposeVisible = ref(false);
+const dailySaving = ref(false);
+const dailyForm = reactive<{ rawContent: string; hours: number | null }>({ rawContent: '', hours: null });
+const dailyPanelKey = ref(0); // 提交成功后 +1 强制重挂日报面板，聚合立即更新
+
+function openDailyCompose() {
+  dailyForm.rawContent = '';
+  dailyForm.hours = null;
+  dailyComposeVisible.value = true;
+}
+
+async function submitDailyNow() {
+  const content = dailyForm.rawContent.trim();
+  if (!content) return;
+  dailySaving.value = true;
+  try {
+    await reportsApi.submitDaily(content, dailyForm.hours ?? undefined);
+    ElMessage.success('今日日报已提交');
+    dailyComposeVisible.value = false;
+    dailyPanelKey.value++; // 重新拉取日报看板
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '日报提交失败');
+  } finally {
+    dailySaving.value = false;
+  }
+}
+
+/** 写本周周报 */
+const weeklyComposeVisible = ref(false);
+const weeklySaving = ref(false);
+const weeklyDraftLoading = ref(false);
+const weeklyForm = reactive<{ rawContent: string }>({ rawContent: '' });
+
+function openWeeklyCompose() {
+  weeklyForm.rawContent = '';
+  weeklyComposeVisible.value = true;
+}
+
+/** 把本周（本项目口径）已提交的日报聚合成三段式草稿（后端返回 done/plan/issue 三段），回填后人工可改 */
+async function genWeeklyDraft() {
+  weeklyDraftLoading.value = true;
+  try {
+    const r: any = await reportsApi.weeklyDraft({ projectId: String(route.params.id ?? '') });
+    const parts: string[] = [];
+    if (r?.done) parts.push(`一、已完成的工作\n${r.done}`);
+    if (r?.plan) parts.push(`二、下周计划\n${r.plan}`);
+    if (r?.issue) parts.push(`三、需要协调的问题\n${r.issue}`);
+    weeklyForm.rawContent = parts.join('\n\n');
+    if (!weeklyForm.rawContent) ElMessage.info('本周还没有可聚合的日报，请直接填写');
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '草稿生成失败');
+  } finally {
+    weeklyDraftLoading.value = false;
+  }
+}
+
+async function submitWeeklyNow() {
+  const content = weeklyForm.rawContent.trim();
+  if (!content) return;
+  weeklySaving.value = true;
+  try {
+    await reportsApi.submitWeekly(content, []);
+    ElMessage.success('本周周报已提交，已计入项目周报就绪度');
+    weeklyComposeVisible.value = false;
+    loadWeekly(); // 就绪度 n/total 立即更新
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '周报提交失败');
+  } finally {
+    weeklySaving.value = false;
   }
 }
 
@@ -1771,6 +2309,8 @@ async function load() {
     loadWeekly(); // 项目周报就绪度与 AI 总结，失败不阻断详情
     loadProjDocs(); // 项目文档，失败不阻断详情
     loadDocCenter(); // 文档中心聚合，失败不阻断详情
+    loadNotes(); // 项目纪要，失败不阻断详情
+    loadChatUnread(); // 项目群未读红点，失败不阻断详情
     syncEditForm();
     transferUserId.value = '';
   } catch (e: any) {
@@ -2592,6 +3132,304 @@ const infoOpen = ref(false);
   border-radius: 8px;
 }
 .rule-edit-tip {
+  font-size: 12px;
+  line-height: 1.5;
+}
+/* 项目纪要卡（进度/汇报/备注）：类型 chips + 可收起条目列表 */
+.note-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.note-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 0.5px solid var(--el-border-color);
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.note-chip.on {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+  color: #fff;
+}
+.note-item {
+  border: 0.5px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.note-item.open {
+  background: var(--el-fill-color-light);
+}
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.note-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-caret {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.note-by {
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.note-ops {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+}
+.note-more {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  padding: 6px 0 2px;
+  user-select: none;
+}
+/* 项目群悬浮按钮：详情页右上角，带未读红点 */
+.pchat-fab {
+  position: fixed;
+  top: 96px;
+  right: 22px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--el-color-primary);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.pchat-fab-ico {
+  font-weight: 500;
+}
+.pchat-badge {
+  background: #f56c6c;
+  color: #fff;
+  font-size: 11px;
+  border-radius: 999px;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  padding: 0 5px;
+}
+/* ---- 成员周报卡片墙 ---- */
+.wreport-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.wreport-card {
+  background: #fff;
+  border: 1px solid var(--app-border);
+  border-left: 3px solid #67c23a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.wreport-card:hover {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+.wreport-card.is-miss {
+  border-left-color: var(--el-border-color-darker);
+  background: var(--el-fill-color-lighter);
+  cursor: default;
+}
+.wreport-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wreport-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.wreport-tag {
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 0 8px;
+  line-height: 18px;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+}
+.wreport-tag.r-DEPT_LEADER {
+  background: #ecf5ff;
+  color: #428bff;
+}
+.wreport-tag.r-PROJ_OWNER {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+.wreport-miss {
+  margin-left: auto;
+  font-size: 11px;
+  color: #f56c6c;
+}
+.wreport-body {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+  margin-top: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wreport-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.wreport-full {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.8;
+  max-height: 60vh;
+  overflow: auto;
+}
+/* ---- 会议周日历 ---- */
+.cal-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.cal-col {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--el-fill-color-lighter, #fafafa);
+}
+.cal-col.is-today {
+  border-color: #428bff;
+}
+.cal-col-hd {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding: 4px 0;
+  background: var(--el-fill-color-light, #f5f5f5);
+}
+.cal-col-hd.today {
+  color: #428bff;
+  font-weight: 600;
+  background: #eef4ff;
+}
+.cal-col-body {
+  position: relative;
+  height: 230px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 18px,
+    var(--el-border-color-lighter, #eee) 18px,
+    var(--el-border-color-lighter, #eee) 19px
+  );
+}
+.cal-block {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  background: #e6f1fb;
+  border: 1px solid #7aa7dd;
+  border-radius: 5px;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #0c447c;
+  cursor: pointer;
+  overflow: hidden;
+}
+.cal-block:hover {
+  border-color: #428bff;
+}
+.cal-block.is-done {
+  background: var(--el-fill-color, #f2f2f2);
+  border-color: var(--el-border-color, #ddd);
+  color: var(--el-text-color-secondary);
+}
+.cal-block-t {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-block-time {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.cal-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+.cal-tip {
+  font-size: 12px;
+  margin-top: 8px;
+}
+/* 概览页「即将召开的会议」横幅 */
+.next-meeting-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  border-left: 3px solid var(--el-color-primary);
+}
+.nm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  flex-shrink: 0;
+}
+.nm-label {
+  font-size: 12px;
+  color: var(--el-color-primary);
+  flex-shrink: 0;
+}
+.nm-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 日报 tab 顶部快速写作入口卡 */
+.report-entry-card {
+  padding: 10px 16px;
+  margin-bottom: 10px;
+}
+.report-tip {
   font-size: 12px;
   line-height: 1.5;
 }

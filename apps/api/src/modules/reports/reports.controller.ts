@@ -45,6 +45,18 @@ export class ReportsController {
     return this.reports.dailyOverview(me, { date, projectId, departmentId });
   }
 
+  /** 日报周视图（周日历卡片墙）：?from= 任意日期归一到该自然周周一，?days=7|28|42（月视图多周连排） */
+  @Get('daily-overview/week')
+  dailyOverviewWeek(
+    @CurrentUser() me: { id: string; role: string },
+    @Query('from') from?: string,
+    @Query('days') days?: string,
+    @Query('projectId') projectId?: string,
+    @Query('departmentId') departmentId?: string,
+  ) {
+    return this.reports.dailyOverviewWeek(me, { from, days, projectId, departmentId });
+  }
+
   /** 某成员日报时间轴（按天倒序，含每日工时与区间累计工时）；默认最近 30 天 */
   @Get('person-timeline')
   personTimeline(

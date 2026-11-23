@@ -171,6 +171,28 @@ export const projectsApi = {
     api.post<any>(`/projects/rules/${ruleId}/ack`, { note }),
   /** 应阅/已阅/未阅名单（催办用） */
   ruleRoster: (id: string) => api.get<any>(`/projects/${id}/rules/roster`),
+  /** 项目纪要列表：{ ok, total, counts, notes[] }（时间倒序，含各类型计数与 canManage 标记） */
+  listNotes: (id: string) => api.get<any>(`/projects/${id}/notes`),
+  /** 发布项目纪要（kind: PROGRESS=项目进度 / REPORT=汇报内容 / NOTE=项目备注） */
+  createNote: (id: string, data: { kind: string; title: string; content: string }) =>
+    api.post<any>(`/projects/${id}/notes`, data),
+  /** 编辑纪要（本人/项目负责人/管理员） */
+  updateNote: (noteId: string, data: { title: string; content: string }) =>
+    api.put<any>(`/projects/notes/${noteId}`, data),
+  /** 删除纪要（本人/项目负责人/管理员） */
+  deleteNote: (noteId: string) => api.del(`/projects/notes/${noteId}`),
+  /** 项目群消息列表：{ ok, messages, members, amManager, unread }；afterId 增量 / beforeId 历史分页 */
+  chatList: (id: string, params?: { afterId?: string; beforeId?: string; limit?: number }) =>
+    api.get<any>(`/projects/${id}/chat`, params),
+  /** 发送群消息（content 必填；replyToId 可选引用） */
+  chatSend: (id: string, data: { content: string; replyToId?: string }) =>
+    api.post<any>(`/projects/${id}/chat`, data),
+  /** 我的群未读数（红点） */
+  chatUnread: (id: string) => api.get<any>(`/projects/${id}/chat/unread`),
+  /** 上报已读位置（打开抽屉时调用） */
+  chatRead: (id: string) => api.post<any>(`/projects/${id}/chat/read`, {}),
+  /** 撤回消息（本人 2 分钟内；负责人/管理员可删任意） */
+  chatDelete: (messageId: string) => api.del(`/projects/chat/${messageId}`),
   /** 项目会议列表（详情页卡片）：已召开 + 即将召开 */
   meetings: (id: string) => api.get<any>(`/projects/${id}/meetings`),
   /** 项目排期计划（详情页「排期计划」页签）：阶段列表 + 项目计划期 + 是否可编辑 */
@@ -332,6 +354,15 @@ export const reportsApi = {
     if (opts.projectId) qs.push(`projectId=${encodeURIComponent(opts.projectId)}`);
     if (opts.departmentId) qs.push(`departmentId=${encodeURIComponent(opts.departmentId)}`);
     return api.get<any>(`/reports/daily-overview${qs.length ? '?' + qs.join('&') : ''}`);
+  },
+  /** 日报周视图（周日历卡片墙）：from 任意日期归一到该自然周周一；days=7 周 / 28|42 月视图 */
+  dailyOverviewWeek: (opts: { from?: string; days?: number; projectId?: string; departmentId?: string } = {}) => {
+    const qs: string[] = [];
+    if (opts.from) qs.push(`from=${encodeURIComponent(opts.from)}`);
+    if (opts.days) qs.push(`days=${opts.days}`);
+    if (opts.projectId) qs.push(`projectId=${encodeURIComponent(opts.projectId)}`);
+    if (opts.departmentId) qs.push(`departmentId=${encodeURIComponent(opts.departmentId)}`);
+    return api.get<any>(`/reports/daily-overview/week${qs.length ? '?' + qs.join('&') : ''}`);
   },
   /** 某成员日报时间轴（每天正文+工时，含区间累计工时）；userId 缺省=本人 */
   personTimeline: (opts: { userId?: string; from?: string; to?: string } = {}) => {
