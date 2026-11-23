@@ -1,7 +1,7 @@
 <template>
   <div class="pdp-card page-card" v-loading="loading">
     <div class="block-title-row">
-      <span class="block-title">项目日报（{{ day?.scopeLabel || '本项目' }}）</span>
+      <span class="block-title">项目日报（{{ wall?.scopeLabel || '本项目' }}）</span>
       <el-radio-group v-model="tab" size="small" @change="onTabChange">
         <el-radio-button value="day">按日期</el-radio-button>
         <el-radio-button value="person">按人员</el-radio-button>
@@ -9,35 +9,61 @@
       </el-radio-group>
     </div>
 
-    <!-- 按日期：本项目当天所有人的日报排成一段 -->
+    <!-- 按日期 → 一周卡片墙：七天七列平铺，谁的日报一眼看清；月视图多周连排 -->
     <template v-if="tab === 'day'">
       <div class="pdp-bar">
+        <el-radio-group v-model="wallMode" size="small" @change="loadWall">
+          <el-radio-button value="week">周视图</el-radio-button>
+          <el-radio-button value="month">月视图</el-radio-button>
+        </el-radio-group>
         <el-button-group size="small">
-          <el-button @click="shiftDay(-1)">前一天</el-button>
-          <el-button :type="isToday ? 'primary' : ''" @click="pickToday">今天</el-button>
-          <el-button @click="shiftDay(1)">后一天</el-button>
+          <el-button @click="shiftWall(-1)">上一{{ wallMode === 'week' ? '周' : '月' }}</el-button>
+          <el-button :type="wallIsCurrent ? 'primary' : ''" @click="pickWallToday">今天</el-button>
+          <el-button @click="shiftWall(1)">下一{{ wallMode === 'week' ? '周' : '月' }}</el-button>
         </el-button-group>
-        <el-date-picker
-          v-model="date"
-          type="date"
-          size="small"
-          value-format="YYYY-MM-DD"
-          :clearable="false"
-          class="pdp-date"
-          @change="loadDay"
-        />
-        <span v-if="day" class="muted">
-          已交 <b class="ok">{{ day.submittedCount }}/{{ day.rosterCount }}</b>
-          · 当日总工时 <b class="hrs">{{ day.totalHours }}</b> 小时
+        <span v-if="wall" class="muted">
+          {{ wall.from }} ~ {{ wall.to }} · 已交 <b class="ok">{{ wall.submittedCount }}</b> 篇
+          · 累计 <b class="hrs">{{ wall.totalHours }}</b> 小时
         </span>
       </div>
       <!-- 口径说明：项目日报按「成员」统计，不是按「日报归属本项目」统计 -->
       <div class="muted pdp-tip">
-        只要他是本项目成员，他当天写的日报就会全部出现在这里（一人一天只有一篇日报）；
-        标签上标的是这篇日报本身归属的项目（AI 判断），没判出来的标为「未标归属」。
+        只要他是本项目成员，他当天写的日报就会出现在这一列（一人一天一篇）；点卡片看全文。
       </div>
-      <!-- 与「历史日报」「日报看板」用同一个 ReportDoc：全站日报都是一种文档式时间轴 -->
-      <ReportDoc v-if="day" :days="dayDocDays" :clickable="false" :clamp="false" empty-text="当天没有可查看的成员日报。" />
+      <div v-loading="loading" class="pdp-wall">
+        <div v-for="col in wallColumns" :key="col.key" class="pdp-col" :class="{ 'is-today': col.isToday }">
+          <div class="pdp-col-head">
+            <span class="pdp-col-name">{{ col.weekday }}</span>
+            <span v-if="col.dateLabel" class="pdp-col-date">{{ col.dateLabel }}</span>
+          </div>
+          <div v-if="wallMode === 'week' && col.missing > 0" class="pdp-col-miss">缺 {{ col.missing }} 人未交</div>
+          <template v-for="g in col.groups" :key="g.date">
+            <div v-if="wallMode === 'month'" class="pdp-col-day">
+              {{ g.date.slice(5) }}
+              <span v-if="g.rosterCount != null && g.submittedCount < g.rosterCount" class="pdp-col-miss">缺{{ g.rosterCount - g.submittedCount }}人</span>
+            </div>
+            <div v-for="it in g.items" :key="it.reportId" class="pdp-card" @click="openCard(it)">
+              <div class="pdp-card-head">
+                <span class="pdp-card-name">{{ it.name }}</span>
+                <span v-if="typeof it.hours === 'number'" class="pdp-card-hours">{{ it.hours }}h</span>
+              </div>
+              <div class="pdp-card-body">{{ oneLine(it.content) }}</div>
+              <div v-if="it.projectName" class="pdp-card-proj">{{ it.projectName }}</div>
+            </div>
+            <div v-if="!g.items.length" class="pdp-col-empty">{{ g.isFuture ? '—' : '当天无日报' }}</div>
+          </template>
+        </div>
+      </div>
+      <!-- 点卡片展开的全文弹窗 -->
+      <el-dialog v-model="cardVisible" :title="cardItem ? `${cardItem.name} 的日报` : '日报'" width="min(96vw, 560px)" append-to-body>
+        <template v-if="cardItem">
+          <div class="pdp-card-meta">
+            <el-tag v-if="typeof cardItem.hours === 'number'" size="small" type="warning" effect="plain">当日工时 {{ cardItem.hours }} 小时</el-tag>
+            <el-tag v-if="cardItem.projectName" size="small" type="success" effect="plain">归属：{{ cardItem.projectName }}</el-tag>
+          </div>
+          <div class="pdp-card-full">{{ cardItem.content || '（无正文）' }}</div>
+        </template>
+      </el-dialog>
     </template>
 
     <!-- 按人员：单人时间轴，逐日工时 + 区间累计 -->
@@ -161,28 +187,100 @@ const people = computed(() => {
   return list;
 });
 
-// ---- 按日期 ----
-const date = ref(dayjs().format('YYYY-MM-DD'));
-const day = ref<any>(null);
-const isToday = computed(() => date.value === dayjs().format('YYYY-MM-DD'));
+// ---- 按日期 → 一周卡片墙 ----
+const date = ref(dayjs().format('YYYY-MM-DD')); // 供工时排行取基准日期
+const wallMode = ref<'week' | 'month'>('week');
+const wallAnchor = ref(dayjs().format('YYYY-MM-DD'));
+const wall = ref<any>(null);
+const cardVisible = ref(false);
+const cardItem = ref<any>(null);
 
-async function loadDay() {
+/** 北京时区口径的周一（本地时区不管，后端会再归一一次） */
+function mondayOf(d: dayjs.Dayjs) {
+  return d.subtract((d.day() + 6) % 7, 'day');
+}
+
+/** 月视图的起点与天数：从当月 1 号所在周的周一开始，整周连排到月底 */
+function monthRange() {
+  const first = dayjs(wallAnchor.value).startOf('month');
+  const start = mondayOf(first);
+  const end = first.endOf('month');
+  const days = Math.ceil((end.diff(start, 'day') + 1) / 7) * 7;
+  return { from: start.format('YYYY-MM-DD'), days };
+}
+
+async function loadWall() {
   loading.value = true;
   try {
-    day.value = await reportsApi.dailyOverview({ date: date.value || undefined, projectId: props.projectId });
+    const base =
+      wallMode.value === 'week'
+        ? { from: wallAnchor.value, days: 7, projectId: props.projectId }
+        : { from: monthRange().from, days: monthRange().days, projectId: props.projectId };
+    wall.value = await reportsApi.dailyOverviewWeek(base);
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || '加载项目日报失败');
   } finally {
     loading.value = false;
   }
 }
-function shiftDay(step: number) {
-  date.value = dayjs(date.value).add(step, 'day').format('YYYY-MM-DD');
-  loadDay();
+
+function shiftWall(step: number) {
+  wallAnchor.value =
+    wallMode.value === 'week'
+      ? dayjs(wallAnchor.value).add(step * 7, 'day').format('YYYY-MM-DD')
+      : dayjs(wallAnchor.value).add(step, 'month').format('YYYY-MM-DD');
+  loadWall();
 }
-function pickToday() {
-  date.value = dayjs().format('YYYY-MM-DD');
-  loadDay();
+
+function pickWallToday() {
+  wallAnchor.value = dayjs().format('YYYY-MM-DD');
+  loadWall();
+}
+
+/** 当前视图是否是本周/本月（控制「今天」按钮高亮） */
+const wallIsCurrent = computed(() => {
+  const now = dayjs();
+  if (wallMode.value === 'week') {
+    return mondayOf(now).format('YYYY-MM-DD') === mondayOf(dayjs(wallAnchor.value)).format('YYYY-MM-DD');
+  }
+  return now.format('YYYY-MM') === dayjs(wallAnchor.value).format('YYYY-MM');
+});
+
+/** 卡片墙的列：周视图 7 列各一天；月视图 7 列各一串星期（列内多天堆叠） */
+const wallColumns = computed(() => {
+  const days: any[] = wall.value?.days ?? [];
+  if (wallMode.value === 'week') {
+    return days.map((d: any) => ({
+      key: d.date,
+      weekday: d.weekday,
+      dateLabel: d.date.slice(5),
+      isToday: d.isToday,
+      missing: d.rosterCount != null ? Math.max(0, d.rosterCount - d.submittedCount) : 0,
+      groups: [d],
+    }));
+  }
+  const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  const cols = names.map((n, i) => ({ key: `c${i}`, weekday: n, dateLabel: '', isToday: false, missing: 0, groups: [] as any[] }));
+  for (const d of days) {
+    const idx = (dayjs(d.date).day() + 6) % 7;
+    cols[idx].groups.push(d);
+    if (d.isToday) cols[idx].isToday = true;
+  }
+  return cols;
+});
+
+/** 卡片里的单行摘要：去掉 Markdown 符号与换行，超长截断 */
+function oneLine(s: string) {
+  const t = String(s ?? '')
+    .replace(/[#*`>~\-]{1,}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > 60 ? `${t.slice(0, 60)}…` : t;
+}
+
+function openCard(it: any) {
+  cardItem.value = it;
+  cardVisible.value = true;
 }
 
 /** 条目小标签：当日工时 + 这篇日报自己的归属项目（未提交的不打这两个标签） */
@@ -194,27 +292,6 @@ function itemTags(it: any): DocTag[] {
   if (submitted) tags.push({ label: it.projectName ? `归属：${it.projectName}` : '未标归属', type: it.projectName ? 'success' : 'info' });
   return tags;
 }
-
-/** 按日看全员 → ReportDoc 入参：一天一个日期节点，右侧按人排开（已交在前、未提交置后） */
-const dayDocDays = computed<DocDay[]>(() => {
-  const d = day.value;
-  if (!d) return [];
-  return [
-    {
-      key: d.date,
-      label: d.date,
-      sub: WEEK_CN[dayjs(d.date).day()],
-      entries: (d.items ?? []).map((it: any) => ({
-        key: it.userId,
-        name: it.name,
-        tags: itemTags(it),
-        submitted: !!it.submitted,
-        content: it.content,
-        raw: it,
-      })),
-    },
-  ];
-});
 
 // ---- 按人员 ----
 const personId = ref('');
@@ -300,7 +377,7 @@ function pct(hours: number) {
 
 onMounted(() => {
   personId.value = people.value[0]?.id || '';
-  loadDay();
+  loadWall();
 });
 </script>
 
@@ -379,6 +456,134 @@ onMounted(() => {
   border-color: #428bff;
   color: #428bff;
   font-weight: 600;
+}
+/* ---- 一周卡片墙 ---- */
+.pdp-wall {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+  min-height: 160px;
+}
+.pdp-col {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter, #fafafa);
+  padding: 6px;
+  min-height: 120px;
+}
+.pdp-col.is-today {
+  border-color: #428bff;
+  background: #f5f9ff;
+}
+.pdp-col-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 4px 6px;
+}
+.pdp-col-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.pdp-col.is-today .pdp-col-name {
+  color: #428bff;
+}
+.pdp-col-date {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.pdp-col-miss {
+  font-size: 11px;
+  color: #f56c6c;
+  padding: 0 4px 4px;
+}
+.pdp-col-day {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding: 6px 4px 2px;
+  border-top: 1px dashed var(--app-border);
+  margin-top: 4px;
+}
+.pdp-col-day:first-of-type {
+  border-top: none;
+  margin-top: 0;
+}
+.pdp-card {
+  background: #fff;
+  border: 1px solid var(--app-border);
+  border-left: 3px solid #428bff;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 0 0 6px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.pdp-card:hover {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+.pdp-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.pdp-card-name {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pdp-card-hours {
+  flex: none;
+  font-size: 11px;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+.pdp-card-body {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--el-text-color-regular);
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pdp-card-proj {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pdp-col-empty {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+  padding: 12px 0;
+}
+.pdp-card-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.pdp-card-full {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--el-text-color-primary);
+  max-height: 60vh;
+  overflow: auto;
 }
 .pdp-rank {
   display: inline-block;
