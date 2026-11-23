@@ -35,6 +35,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'tasks', redirect: (to) => (to.query.tab === 'myday'
         ? { name: 'reports', query: { tab: 'myschedule' } }
         : { name: 'reports', query: { ...to.query, tab: 'task', ttab: to.query.tab } }) },
+      // 灵感页并入工作台「灵感」tab
+      { path: 'ideas', redirect: { name: 'reports', query: { tab: 'ideas' } } },
       { path: 'board', redirect: { name: 'reports', query: { tab: 'task', ttab: 'board' } } },
       { path: 'projects', name: 'projects', component: () => import('../views/ProjectsView.vue') },
       { path: 'projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetailView.vue') },
@@ -55,7 +57,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'knowledge', name: 'knowledge', redirect: (to) => ({ name: 'data-center', query: { ...to.query, tab: 'knowledge' } }) },
       // 资源预约模块下线（暂时不要了）：旧链接直接回首页，页面与后端数据保留在历史版本里
       { path: 'resources', redirect: '/' },
-      { path: 'retrospectives', name: 'retrospectives', component: () => import('../views/RetrospectivesView.vue') },
+      // 复盘已拆入 项目详情「复盘」tab 与 部门管理「复盘」tab，独立页下线
+      { path: 'retrospectives', redirect: { name: 'projects' } },
       { path: 'sops', name: 'sops', redirect: (to) => ({ name: 'data-center', query: { ...to.query, tab: 'sops' } }) },
       { path: 'news', name: 'news', redirect: (to) => ({ name: 'data-center', query: { ...to.query, tab: 'news' } }) },
       { path: 'notifications', name: 'notifications', component: () => import('../views/NotificationsView.vue') },

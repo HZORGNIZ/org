@@ -676,6 +676,12 @@
       </div>
       </el-tab-pane>
 
+      <el-tab-pane name="retro" lazy>
+        <template #label>项目复盘</template>
+        <!-- 项目复盘：轮次（结构化 5 问/一般）+ 成员提交 + AI 汇总 + 管理员定稿结论 -->
+        <RetrospectivesView :embedded-project-id="String(route.params.id ?? '')" />
+      </el-tab-pane>
+
       <el-tab-pane name="docs">
         <template #label>项目文档</template>
         <!-- 文档中心：在线文档 + 文件空间文件统一列表，在线预览/下载/编辑，顶部一键上传本周文档 -->
@@ -1138,6 +1144,7 @@ import { TASK_PRIORITY, TASK_STATUS, fmt, isToday, updateDate } from '../utils/f
 import { isTouchDevice, useUpdateMerge } from '../utils/useUpdateMerge';
 import { docTypeMeta, docTypeOptions } from '../utils/doc-types';
 import MarkdownView from '../components/MarkdownView.vue';
+import RetrospectivesView from './RetrospectivesView.vue';
 import DocumentSpace from '../components/DocumentSpace.vue';
 import DocPreview from '../components/DocPreview.vue';
 import ProjectChatDrawer from '../components/ProjectChatDrawer.vue';

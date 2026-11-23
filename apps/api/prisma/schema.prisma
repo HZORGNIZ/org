@@ -198,6 +198,7 @@ model Department {
   files       DocumentFile[]          // 部门文档空间（文件）
   meetingSlots DepartmentMeetingSlot[] // 周会周期位（一个部门可配多场）
   meetings     Meeting[]              @relation("DeptMeetings") // 本部门自动/手动发起的会议
+  deptRetros   DeptRetro[]            // 本部门的复盘记录（部门管理·复盘 tab）
 
   @@index([sortOrder])
 }
@@ -285,6 +286,7 @@ model User {
   coReviewedProjects ProjectCoReview[] @relation("ProjectCoReviewer")
   retroSubmissions RetroSubmission[]
   createdRetros   ProjectRetro[]   @relation("RetroCreator")
+  deptRetrosCreated DeptRetro[]    @relation("DeptRetroCreator")
   proposedSops    Sop[]            @relation("SopProposer")
   confirmedSops   Sop[]            @relation("SopConfirmer")
   ideas           Idea[]
@@ -724,6 +726,9 @@ model ProjectRetro {
   summary   String? // AI 汇总报告（Markdown）
   summaryBy String? // 执行汇总的负责人 userId
   summarizedAt DateTime?
+  finalContent String? // 管理员定稿结论：可修改 AI 稿后保存，也可不经 AI 直接自行输入
+  finalById    String? // 定稿人 userId
+  finalAt      DateTime? // 定稿时间
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -750,6 +755,27 @@ model RetroSubmission {
   user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([retroId, userId])
+}
+
+// 部门复盘（负责人/管理员按周期发起；AI 聚合部门任务/PBC/工时/日报生成 + 管理员定稿）
+model DeptRetro {
+  id           String    @id @default(cuid())
+  departmentId String
+  period       String // 复盘周期 'YYYY-MM'（北京口径自然月）
+  title        String // 如「研发部 2026-11 月度复盘」
+  aiContent    String? // AI 生成复盘稿（Markdown：整体情况 + 每人小结）
+  aiMeta       Json? // 生成时的聚合数据快照（任务/工时/PBC 统计），供追溯
+  finalContent String? // 管理员定稿结论（可改 AI 稿或自行输入）；定稿后对部门成员可见
+  finalById    String?
+  finalAt      DateTime?
+  createdById  String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  creator    User       @relation("DeptRetroCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([departmentId, createdAt])
 }
 
 model KanbanBoard {

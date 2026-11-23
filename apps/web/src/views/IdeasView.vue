@@ -1,6 +1,6 @@
 <template>
-  <div class="page">
-    <div class="page-title">
+  <div :class="embedded ? 'ideas-embedded' : 'page'">
+    <div v-if="!embedded" class="page-title">
       灵感 · 需求
       <el-button type="primary" @click="composerVisible = true">
         <el-icon><Plus /></el-icon>&nbsp;记一条灵感
@@ -150,6 +150,9 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { ideasApi, projectsApi } from '../api';
 import { timeAgo } from '../utils/format';
 import { useAuthStore } from '../stores/auth';
+
+/** 内嵌模式：被工作台「灵感」tab 复用时隐藏页头 */
+defineProps<{ embedded?: boolean }>();
 
 const auth = useAuthStore();
 

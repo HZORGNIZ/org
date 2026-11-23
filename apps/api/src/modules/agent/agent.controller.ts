@@ -170,6 +170,12 @@ export class AgentController {
     return this.agent.getWeekTimeline(me, date);
   }
 
+  /** 我的整月日程总览（月历视图）：?month=YYYY-MM，缺省当月 */
+  @Get('schedule/month')
+  month(@CurrentUser() me: CurrentUserPayload, @Query('month') month?: string) {
+    return this.agent.getMonthTimeline(me, month);
+  }
+
   /** 新增个人日程 / 开放可约时段 */
   @Post('events')
   createEvent(

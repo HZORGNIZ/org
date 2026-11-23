@@ -1,14 +1,20 @@
 <template>
-  <div class="page">
-    <div class="page-title">
+  <div :class="embedded ? 'retro-embedded' : 'page'">
+    <div v-if="!embedded" class="page-title">
       项目复盘
       <el-button v-if="canCreate" type="primary" @click="openCreate">
         <el-icon><Plus /></el-icon>&nbsp;新建复盘
       </el-button>
     </div>
+    <div v-else class="embedded-head">
+      <span class="embedded-title">项目复盘</span>
+      <el-button v-if="canCreate" type="primary" size="small" @click="openCreate">
+        <el-icon><Plus /></el-icon>&nbsp;新建复盘
+      </el-button>
+    </div>
 
     <!-- 复盘轮次列表 -->
-    <div class="page-card">
+    <div :class="embedded ? '' : 'page-card'">
       <div v-loading="loading" class="retro-list">
         <div v-if="!loading && !list.length" class="muted empty">
           暂无复盘轮次
@@ -27,9 +33,10 @@
               >
                 {{ r.status === 'SUMMARIZED' ? '已汇总' : '进行中' }}
               </el-tag>
+              <el-tag v-if="r.finalContent" size="small" type="success" effect="plain">已定稿</el-tag>
             </div>
             <div class="retro-meta muted">
-              <span class="proj-chip">
+              <span v-if="!embedded" class="proj-chip">
                 <el-icon><FolderOpened /></el-icon>{{ r.project?.name }}
               </span>
               <span v-if="r.deadline" :class="{ 'deadline-over': r.overdue }">
@@ -60,7 +67,7 @@
     <!-- 新建复盘 -->
     <el-dialog v-model="createVisible" title="新建复盘轮次" width="min(94vw, 520px)">
       <el-form label-position="top">
-        <el-form-item label="项目（我负责的项目）" required>
+        <el-form-item v-if="!embedded" label="项目（我负责的项目）" required>
           <el-select v-model="createForm.projectId" filterable style="width: 100%">
             <el-option
               v-for="p in creatableProjects"
@@ -150,6 +157,41 @@
         </div>
         <div v-else-if="detail.canManage" class="empty-summary">
           尚未生成汇总报告。成员提交后点击「AI 汇总」生成项目复盘报告。
+        </div>
+
+        <!-- 管理员定稿结论：可改 AI 稿后保存，也可不经 AI 直接输入；全员可见 -->
+        <div v-if="detail.finalContent && !editingFinal" class="summary-box final-box">
+          <div class="block-title">
+            复盘结论（定稿）
+            <span class="muted summary-by">
+              <template v-if="detail.finalAt">· 定稿于 {{ fmt(detail.finalAt, 'YYYY-MM-DD HH:mm') }}</template>
+            </span>
+            <el-button
+              v-if="detail.canManage"
+              size="small"
+              type="warning"
+              plain
+              style="float: right"
+              @click="startEditFinal"
+            >
+              修改结论
+            </el-button>
+          </div>
+          <div class="markdown-box"><MarkdownView :content="detail.finalContent" /></div>
+        </div>
+        <div v-else-if="editingFinal" class="summary-box final-box">
+          <div class="block-title">
+            编辑复盘结论
+            <span class="muted summary-by">可基于 AI 稿修改，也可直接输入自己的结论；保存后全员可见</span>
+          </div>
+          <el-input v-model="finalDraft" type="textarea" :rows="10" placeholder="输入复盘结论（Markdown）" />
+          <div class="submit-row">
+            <el-button size="small" @click="editingFinal = false">取消</el-button>
+            <el-button type="primary" size="small" :loading="savingFinal" @click="saveFinal">保存定稿</el-button>
+          </div>
+        </div>
+        <div v-else-if="detail.canManage && detail.status === 'SUMMARIZED'" class="empty-summary">
+          <el-button size="small" type="warning" plain @click="startEditFinal">写复盘结论（定稿后全员可见）</el-button>
         </div>
 
         <!-- 我的提交 -->
@@ -264,10 +306,42 @@ const STRUCTURED_DEFAULT_QUESTIONS = [
 
 const auth = useAuthStore();
 
+/** 内嵌模式：被项目详情「复盘」tab 复用——只看该项目、新建自动归属、隐藏页头与项目列 */
+const props = defineProps<{ embeddedProjectId?: string }>();
+const embedded = computed(() => !!props.embeddedProjectId);
+
 const list = ref<any[]>([]);
 const projects = ref<any[]>([]);
 const loading = ref(false);
 const summarizingId = ref('');
+
+/** 定稿结论编辑 */
+const editingFinal = ref(false);
+const finalDraft = ref('');
+const savingFinal = ref(false);
+
+function startEditFinal() {
+  finalDraft.value = detail.value?.finalContent || detail.value?.summary || '';
+  editingFinal.value = true;
+}
+
+async function saveFinal() {
+  if (!detail.value) return;
+  if (!finalDraft.value.trim()) {
+    ElMessage.warning('结论内容不能为空');
+    return;
+  }
+  savingFinal.value = true;
+  try {
+    const r: any = await retrospectivesApi.saveConclusion(detail.value.id, finalDraft.value.trim());
+    detail.value = { ...detail.value, finalContent: r.finalContent, finalAt: r.finalAt };
+    ElMessage.success('复盘结论已定稿，成员可见');
+    editingFinal.value = false;
+    load();
+  } finally {
+    savingFinal.value = false;
+  }
+}
 
 // ---- 新建 ----
 const createVisible = ref(false);
@@ -325,14 +399,15 @@ async function loadProjects() {
 async function load() {
   loading.value = true;
   try {
-    list.value = await retrospectivesApi.list();
+    const all: any[] = await retrospectivesApi.list();
+    list.value = props.embeddedProjectId ? all.filter((r) => r.projectId === props.embeddedProjectId) : all;
   } finally {
     loading.value = false;
   }
 }
 
 function openCreate() {
-  createForm.projectId = creatableProjects.value[0]?.id || '';
+  createForm.projectId = props.embeddedProjectId || creatableProjects.value[0]?.id || '';
   createForm.kind = 'STRUCTURED';
   createForm.title = '';
   createForm.deadline = null;
@@ -480,6 +555,23 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.retro-embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.embedded-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.embedded-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+.final-box {
+  border-left: 3px solid var(--el-color-warning);
+}
 .retro-list {
   min-height: 100px;
 }

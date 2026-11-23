@@ -17,6 +17,7 @@
       <el-tab-pane label="日报看板" name="board" />
       <el-tab-pane label="工时统计" name="hours" />
       <el-tab-pane label="我的实践/培训时间" name="schedule" />
+      <el-tab-pane label="灵感" name="ideas" lazy />
       <!-- 待我审核：项目审批 + PBC 计划审批 + PBC 考核评分聚合（仅管理员/部门负责人，成员不展示） -->
       <el-tab-pane v-if="auth.isAdmin || auth.isDeptLeader" label="待我审核" name="review" />
     </el-tabs>
@@ -33,6 +34,9 @@
 
     <!-- 我的日程：整宽（会议/预约/外出/任务截止/可约时段一站式时间轴） -->
     <MyScheduleTab v-else-if="tab === 'myschedule'" />
+
+    <!-- 灵感：内嵌灵感页（记灵感 + 分组列表 + 转任务/转项目），原 /ideas 独立页由路由跳转过来 -->
+    <IdeasView v-else-if="tab === 'ideas'" embedded />
 
     <!-- 任务：复用整个 TasksView（内嵌模式，不写地址栏）；旧 /tasks?tab=xxx 深链由路由映射 initialTab -->
     <TasksView v-else-if="tab === 'task'" embedded :initial-tab="embeddedTaskTab" />
@@ -765,6 +769,7 @@ import ReportsStatsPanel from '../components/ReportsStatsPanel.vue';
 import WorkSchedulePanel from '../components/WorkSchedulePanel.vue';
 import PendingReviewPanel from '../components/PendingReviewPanel.vue';
 import MyScheduleTab from '../components/MyScheduleTab.vue';
+import IdeasView from './IdeasView.vue';
 import TasksView from './TasksView.vue';
 import ReportDoc from '../components/ReportDoc.vue';
 import type { DocDay, DocTag } from '../components/report-doc';
@@ -775,8 +780,8 @@ const route = useRoute();
 
 // ---- 大 tab（日报 / 周报 / PBC / 任务 / 日报看板 / 工时统计）----
 // 前三个 tab 直接驱动下面的 type（写卡内部仍按 DAILY/WEEKLY/PBC 分支渲染）；board/hours 内嵌日报看板与工时统计面板；task 内嵌整个任务页
-type TabKey = 'myschedule' | 'daily' | 'weekly' | 'pbc' | 'task' | 'board' | 'hours' | 'schedule' | 'review';
-const TAB_KEYS: TabKey[] = ['myschedule', 'daily', 'weekly', 'pbc', 'task', 'board', 'hours', 'schedule', 'review'];
+type TabKey = 'myschedule' | 'daily' | 'weekly' | 'pbc' | 'task' | 'board' | 'hours' | 'schedule' | 'ideas' | 'review';
+const TAB_KEYS: TabKey[] = ['myschedule', 'daily', 'weekly', 'pbc', 'task', 'board', 'hours', 'schedule', 'ideas', 'review'];
 const TAB_TYPE: Record<string, 'DAILY' | 'WEEKLY' | 'PBC' | undefined> = {
   daily: 'DAILY',
   weekly: 'WEEKLY',

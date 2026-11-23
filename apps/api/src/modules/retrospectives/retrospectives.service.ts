@@ -124,6 +124,8 @@ export class RetrospectivesService {
         status: r.status,
         deadline: r.deadline,
         summary: r.summary,
+        finalContent: r.finalContent,
+        finalAt: r.finalAt,
         createdAt: r.createdAt,
         project: r.project,
         membersTotal: memberIds.size,
@@ -282,10 +284,13 @@ export class RetrospectivesService {
     if (!retro.submissions.length) throw new BadRequestException('暂无成员提交，还不能生成汇总报告');
 
     const submissionsText = await this.formatSubmissionsForAi(retro as any);
+    // 项目经营数据（任务/工时/日报周报/纪要）：让 AI 汇总不止基于成员提交，还能对照客观经营情况
+    const contextText = await this.projectContextText(retro.projectId);
     const markdown = await this.ai.generate('retrospective.summary', {
       projectName: retro.project.name,
       retroKind: retro.kind,
       submissions: submissionsText,
+      context: contextText,
     });
     if (!markdown) throw new ServiceUnavailableException('AI 汇总失败，请稍后重试');
 
@@ -358,5 +363,274 @@ export class RetrospectivesService {
       this.logger.warn(`解析复盘附件失败（降级为仅文件名）: ${name}`, e as Error);
       return `（附件 ${name} 文本解析失败，仅保留文件名）`;
     }
+  }
+
+  /** 项目经营数据文本（AI 汇总的客观对照面）：任务完成/逾期 + 近30天日报周报工时 + 最近纪要 */
+  private async projectContextText(projectId: string): Promise<string> {
+    try {
+      const now = new Date();
+      const monthAgo = new Date(now.getTime() - 30 * 86400000);
+      const [tasks, reports, notes] = await Promise.all([
+        this.prisma.task.groupBy({
+          by: ['status'],
+          where: { projectId, project: { archived: false } },
+          _count: true,
+        }),
+        this.prisma.report.groupBy({
+          by: ['type'],
+          where: { projectId, periodStart: { gte: monthAgo, lt: now }, status: 'PUBLISHED' },
+          _count: true,
+        }),
+        this.prisma.projectNote.findMany({
+          where: { projectId, kind: { in: ['PROGRESS', 'REPORT'] } },
+          orderBy: { publishedAt: 'desc' },
+          take: 5,
+          select: { kind: true, title: true, content: true, publishedAt: true },
+        }),
+      ]);
+      const taskLine = tasks.map((t) => `${t.status}:${t._count}`).join(' / ') || '无任务';
+      const reportLine = reports.map((r) => `${r.type}:${r._count} 篇`).join(' / ') || '无提交';
+      const noteLines = notes.map((n) => `- [${n.kind}] ${n.title}（${n.publishedAt.toISOString().slice(0, 10)}）${String(n.content ?? '').slice(0, 120)}`);
+      const overdue = await this.prisma.task.count({
+        where: { projectId, project: { archived: false }, status: { not: 'DONE' }, dueDate: { lt: now } },
+      });
+      return [
+        `任务分布：${taskLine}；其中逾期未完成 ${overdue} 个`,
+        `近 30 天项目归属日报/周报提交：${reportLine}`,
+        ...(noteLines.length ? ['最近项目纪要：', ...noteLines] : []),
+      ].join('\n');
+    } catch (e) {
+      this.logger.warn(`项目经营数据聚合失败（复盘汇总降级为仅成员提交）: ${(e as Error).message}`);
+      return '（项目经营数据暂不可用）';
+    }
+  }
+
+  /** 项目复盘定稿：负责人/管理员保存最终结论（可改 AI 稿，也可不经 AI 直接输入） */
+  async saveConclusion(userId: string, retroId: string, content: string) {
+    const text = String(content ?? '').trim();
+    if (!text) throw new BadRequestException('结论内容不能为空');
+    const retro = await this.prisma.projectRetro.findUnique({ where: { id: retroId }, select: { id: true, projectId: true } });
+    if (!retro) throw new NotFoundException('复盘不存在');
+    const ctx = await this.loadProjectCtx(retro.projectId, userId);
+    this.assertManager(ctx);
+    return this.prisma.projectRetro.update({
+      where: { id: retroId },
+      data: { finalContent: text, finalById: userId, finalAt: new Date() },
+      select: { id: true, finalContent: true, finalAt: true },
+    });
+  }
+
+  // ======== 部门复盘（部门管理 · 复盘 tab）========
+
+  /** 部门可见口径：管理员=全部；负责人/共管人=所辖部门；普通成员=主部门+额外部门（只读） */
+  private async myDeptScope(userId: string) {
+    const isAdmin = (await this.roleOf(userId)) === Role.ADMIN;
+    const [me, ledDepts] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { departmentId: true, extraDepartments: { select: { id: true } } },
+      }),
+      this.prisma.department.findMany({
+        where: { OR: [{ leaderId: userId }, { managerIds: { has: userId } }] },
+        select: { id: true },
+      }),
+    ]);
+    const manageIds = new Set(ledDepts.map((d) => d.id));
+    const visibleIds = new Set<string>([
+      ...manageIds,
+      ...(me?.departmentId ? [me.departmentId] : []),
+      ...(me?.extraDepartments ?? []).map((d) => d.id),
+    ]);
+    return { isAdmin, manageIds, visibleIds };
+  }
+
+  private assertDeptManage(scope: { isAdmin: boolean; manageIds: Set<string> }, departmentId: string) {
+    if (!scope.isAdmin && !scope.manageIds.has(departmentId)) {
+      throw new ForbiddenException('仅部门负责人/共管人或管理员可操作部门复盘');
+    }
+  }
+
+  /** 部门复盘列表：可见部门的全部复盘（含部门名与我的操作权限） */
+  async deptList(userId: string) {
+    const scope = await this.myDeptScope(userId);
+    const rows = await this.prisma.deptRetro.findMany({
+      where: scope.isAdmin ? {} : { departmentId: { in: [...scope.visibleIds] } },
+      include: {
+        department: { select: { id: true, name: true } },
+        creator: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      departmentId: r.departmentId,
+      departmentName: r.department?.name ?? '',
+      period: r.period,
+      title: r.title,
+      hasAi: !!r.aiContent,
+      aiContent: r.aiContent,
+      finalContent: r.finalContent,
+      finalAt: r.finalAt,
+      createdAt: r.createdAt,
+      creatorName: r.creator?.name ?? '',
+      canManage: scope.isAdmin || scope.manageIds.has(r.departmentId),
+    }));
+  }
+
+  /** 发起部门复盘（负责人/共管人/管理员）：period=YYYY-MM */
+  async deptCreate(userId: string, body: { departmentId: string; period: string; title?: string }) {
+    const departmentId = String(body?.departmentId ?? '');
+    const period = String(body?.period ?? '').trim();
+    if (!/^\d{4}-\d{2}$/.test(period)) throw new BadRequestException('复盘周期格式应为 YYYY-MM');
+    const dept = await this.prisma.department.findUnique({ where: { id: departmentId }, select: { id: true, name: true } });
+    if (!dept) throw new NotFoundException('部门不存在');
+    const scope = await this.myDeptScope(userId);
+    this.assertDeptManage(scope, departmentId);
+    const dup = await this.prisma.deptRetro.findFirst({ where: { departmentId, period }, select: { id: true } });
+    if (dup) throw new BadRequestException(`${period} 已有部门复盘，请直接在该记录上生成/定稿`);
+    return this.prisma.deptRetro.create({
+      data: {
+        departmentId,
+        period,
+        title: String(body?.title ?? '').trim() || `${dept.name} ${period} 月度复盘`,
+        createdById: userId,
+      },
+    });
+  }
+
+  /** 部门成员（主部门 + 额外加入，口径与部门工作总览一致） */
+  private async deptMemberIds(departmentId: string): Promise<string[]> {
+    const members = await this.prisma.user.findMany({
+      where: { OR: [{ departmentId }, { extraDepartments: { some: { id: departmentId } } }] },
+      select: { id: true, name: true },
+    });
+    return members.map((m) => m.id);
+  }
+
+  /** AI 生成部门复盘：聚合周期内 任务/工时/日报周报/PBC + 项目进展 → Markdown（整体情况 + 每人小结） */
+  async deptAiGenerate(userId: string, retroId: string) {
+    const retro = await this.prisma.deptRetro.findUnique({
+      where: { id: retroId },
+      include: { department: { select: { id: true, name: true } } },
+    });
+    if (!retro) throw new NotFoundException('部门复盘不存在');
+    const scope = await this.myDeptScope(userId);
+    this.assertDeptManage(scope, retro.departmentId);
+
+    const memberIds = await this.deptMemberIds(retro.departmentId);
+    if (!memberIds.length) throw new BadRequestException('该部门暂无成员，无法生成复盘');
+    const monthStart = new Date(`${retro.period}-01T00:00:00+08:00`);
+    const nextY = Number(retro.period.slice(0, 4)) + (Number(retro.period.slice(5, 7)) === 12 ? 1 : 0);
+    const nextM = Number(retro.period.slice(5, 7)) === 12 ? 1 : Number(retro.period.slice(5, 7)) + 1;
+    const monthEnd = new Date(`${nextY}-${String(nextM).padStart(2, '0')}-01T00:00:00+08:00`);
+    const now = new Date();
+
+    const [members, tasks, hoursRows, reports, pbcs, projects] = await Promise.all([
+      this.prisma.user.findMany({ where: { id: { in: memberIds } }, select: { id: true, name: true } }),
+      this.prisma.task.findMany({
+        where: { assigneeId: { in: memberIds } },
+        select: { id: true, title: true, status: true, dueDate: true, assigneeId: true },
+      }),
+      this.prisma.report.groupBy({
+        by: ['ownerId'],
+        where: { type: 'DAILY', ownerId: { in: memberIds }, periodStart: { gte: monthStart, lt: monthEnd } },
+        _sum: { hours: true },
+        _count: true,
+      }),
+      this.prisma.report.groupBy({
+        by: ['ownerId', 'type'],
+        where: { ownerId: { in: memberIds }, periodStart: { gte: monthStart, lt: monthEnd }, status: 'PUBLISHED' },
+        _count: true,
+      }),
+      this.prisma.pbc.findMany({
+        where: { ownerId: { in: memberIds }, month: retro.period },
+        select: { ownerId: true, status: true, reviewStatus: true, leaderTotal: true },
+      }),
+      this.prisma.projectDepartment.findMany({
+        where: { departmentId: retro.departmentId },
+        include: { project: { select: { name: true, progress: true, archived: true } } },
+      }),
+    ]);
+
+    const nameById = new Map(members.map((m) => [m.id, m.name]));
+    const taskStats = new Map<string, { total: number; done: number; overdue: number }>();
+    for (const t of tasks) {
+      if (!t.assigneeId) continue;
+      const s = taskStats.get(t.assigneeId) ?? { total: 0, done: 0, overdue: 0 };
+      s.total += 1;
+      if (t.status === 'DONE') s.done += 1;
+      else if (t.dueDate && t.dueDate < now) s.overdue += 1;
+      taskStats.set(t.assigneeId, s);
+    }
+    const hoursById = new Map<string, { hours: number; days: number }>();
+    for (const h of hoursRows) {
+      if (!h.ownerId) continue; // groupBy 结果 ownerId 可空（类型收窄）
+      hoursById.set(h.ownerId, { hours: Math.round((h._sum.hours ?? 0) * 10) / 10, days: h._count });
+    }
+    const reportCount = new Map<string, { daily: number; weekly: number }>();
+    for (const r of reports) {
+      if (!r.ownerId) continue;
+      const cur = reportCount.get(r.ownerId) ?? { daily: 0, weekly: 0 };
+      if (r.type === 'DAILY') cur.daily += r._count;
+      if (r.type === 'WEEKLY') cur.weekly += r._count;
+      reportCount.set(r.ownerId, cur);
+    }
+    const pbcById = new Map<string, { status: string; leaderTotal: number | null }>();
+    for (const p of pbcs) pbcById.set(p.ownerId, { status: p.status, leaderTotal: p.leaderTotal ?? null });
+
+    const personLines = members.map((m) => {
+      const ts = taskStats.get(m.id) ?? { total: 0, done: 0, overdue: 0 };
+      const hr = hoursById.get(m.id);
+      const rp = reportCount.get(m.id);
+      const pb = pbcById.get(m.id);
+      return [
+        `【${m.name}】`,
+        `任务：共 ${ts.total}（完成 ${ts.done}，逾期 ${ts.overdue}）`,
+        `本月工时：${hr?.hours ?? 0} 小时（日报 ${rp?.daily ?? 0} 篇，周报 ${rp?.weekly ?? 0} 篇）`,
+        `PBC：${pb ? `${pb.status}${pb.leaderTotal != null ? `，考核得分 ${pb.leaderTotal}` : ''}` : '本月未创建'}`,
+      ].join('\n');
+    });
+
+    const projectLines = projects
+      .filter((p) => !p.project.archived)
+      .map((p) => `- ${p.project.name}：进度 ${p.project.progress ?? 0}%`);
+    const deptStats = {
+      members: members.length,
+      tasksTotal: tasks.length,
+      tasksDone: tasks.filter((t) => t.status === 'DONE').length,
+      tasksOverdue: tasks.filter((t) => t.status !== 'DONE' && t.dueDate && t.dueDate < now).length,
+      totalHours: [...hoursById.values()].reduce((a, b) => a + b.hours, 0),
+      projects: projectLines.length,
+    };
+
+    const markdown = await this.ai.generate('department.retro', {
+      deptName: retro.department?.name ?? '',
+      period: retro.period,
+      deptStats: JSON.stringify(deptStats),
+      projects: projectLines.join('\n') || '（本部门暂无在办项目）',
+      persons: personLines.join('\n\n'),
+    });
+    if (!markdown) throw new ServiceUnavailableException('AI 复盘生成失败，请稍后重试');
+
+    const updated = await this.prisma.deptRetro.update({
+      where: { id: retroId },
+      data: { aiContent: markdown.trim(), aiMeta: deptStats as any },
+    });
+    return { ...updated, aiMeta: deptStats };
+  }
+
+  /** 部门复盘定稿（可改 AI 稿或自行输入）；定稿后部门成员可见 */
+  async deptSaveConclusion(userId: string, retroId: string, content: string) {
+    const text = String(content ?? '').trim();
+    if (!text) throw new BadRequestException('结论内容不能为空');
+    const retro = await this.prisma.deptRetro.findUnique({ where: { id: retroId }, select: { departmentId: true } });
+    if (!retro) throw new NotFoundException('部门复盘不存在');
+    const scope = await this.myDeptScope(userId);
+    this.assertDeptManage(scope, retro.departmentId);
+    return this.prisma.deptRetro.update({
+      where: { id: retroId },
+      data: { finalContent: text, finalById: userId, finalAt: new Date() },
+      select: { id: true, finalContent: true, finalAt: true },
+    });
   }
 }

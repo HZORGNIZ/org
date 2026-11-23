@@ -482,6 +482,8 @@ export const agentApi = {
   timeline: (date?: string) => api.get<any>('/agent/schedule/timeline', { date }),
   /** 我的日程：未来 7 天时间轴（周网格设置可约用） */
   week: (date?: string) => api.get<any>('/agent/schedule/week', { date }),
+  /** 我的日程：整月总览（月历视图用）?month=YYYY-MM 缺省当月 */
+  monthSchedule: (month?: string) => api.get<any>('/agent/schedule/month', { month }),
   /** 新增个人日程 / 开放可约时段（EVENT=日程安排 / FREE=开放可约 / BUSY=占用） */
   createEvent: (data: { date: string; startMin: number | string; endMin: number | string; kind?: string; title?: string; note?: string; source?: string }) =>
     api.post<{ ok: boolean; id: string; warning: string | null }>('/agent/events', data),
@@ -986,6 +988,18 @@ export const retrospectivesApi = {
   ) => api.put(`/retrospectives/${id}/submission`, data),
   /** AI 汇总（负责人/管理员） */
   summarize: (id: string) => api.post(`/retrospectives/${id}/summarize`),
+  /** 项目复盘定稿：保存管理员结论（可改 AI 稿或自行输入） */
+  saveConclusion: (id: string, content: string) => api.put(`/retrospectives/${id}/conclusion`, { content }),
+  /** 部门复盘列表：可见部门的全部复盘 */
+  deptList: () => api.get<any[]>('/retrospectives/departments/retros'),
+  /** 发起部门复盘：period=YYYY-MM */
+  deptCreate: (departmentId: string, data: { period: string; title?: string }) =>
+    api.post<any>(`/retrospectives/departments/${departmentId}/retros`, data),
+  /** AI 生成部门复盘（10~20s，聚合任务/工时/日报周报/PBC/项目进展） */
+  deptAi: (id: string) => api.post<any>(`/retrospectives/dept-retros/${id}/ai`),
+  /** 部门复盘定稿 */
+  deptSaveConclusion: (id: string, content: string) =>
+    api.put(`/retrospectives/dept-retros/${id}/conclusion`, { content }),
 };
 
 // ---------- SOP 经验库 ----------

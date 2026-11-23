@@ -29,9 +29,6 @@
         <el-menu-item index="/ideas">
           <el-icon><Sunny /></el-icon><span>灵感</span>
         </el-menu-item>
-        <el-menu-item index="/retrospectives">
-          <el-icon><RefreshLeft /></el-icon><span>复盘</span>
-        </el-menu-item>
         <el-menu-item index="/data-center">
           <el-icon><Notebook /></el-icon><span>资料中心</span>
         </el-menu-item>

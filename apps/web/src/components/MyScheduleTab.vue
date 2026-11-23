@@ -1,15 +1,27 @@
 <template>
   <div class="myday-wrap">
-    <!-- 顶部：日期导航 + 添加日程 -->
+    <!-- 顶部：视图切换（月历默认）+ 日期/月份导航 + 添加日程 -->
     <div class="page-card myday-head">
       <div class="myday-nav">
-        <el-button size="small" @click="shiftDay(-1)">前一天</el-button>
-        <el-date-picker v-model="dateStr" type="date" value-format="YYYY-MM-DD" :clearable="false" style="width: 150px" @change="load" />
-        <el-button size="small" @click="shiftDay(1)">后一天</el-button>
-        <el-button v-if="dateStr !== today" size="small" text type="primary" @click="goToday">回到今天</el-button>
-        <span class="myday-weekday">{{ tl?.weekday }}</span>
+        <el-radio-group v-model="view" size="small" @change="onViewChange">
+          <el-radio-button value="month">月历</el-radio-button>
+          <el-radio-button value="day">单日</el-radio-button>
+        </el-radio-group>
+        <template v-if="view === 'month'">
+          <el-button size="small" @click="shiftMonth(-1)">‹</el-button>
+          <b class="myday-month-label">{{ monthStr }}</b>
+          <el-button size="small" @click="shiftMonth(1)">›</el-button>
+          <el-button v-if="monthStr !== today.slice(0, 7)" size="small" text type="primary" @click="goThisMonth">回到本月</el-button>
+        </template>
+        <template v-else>
+          <el-button size="small" @click="shiftDay(-1)">前一天</el-button>
+          <el-date-picker v-model="dateStr" type="date" value-format="YYYY-MM-DD" :clearable="false" style="width: 150px" @change="load" />
+          <el-button size="small" @click="shiftDay(1)">后一天</el-button>
+          <el-button v-if="dateStr !== today" size="small" text type="primary" @click="goToday">回到今天</el-button>
+          <span class="myday-weekday">{{ tl?.weekday }}</span>
+        </template>
       </div>
-      <div class="myday-stats">
+      <div v-if="view === 'day'" class="myday-stats">
         <button
           v-for="f in filters"
           :key="f.key"
@@ -20,14 +32,40 @@
         <el-button type="primary" size="small" @click="openAdd()">＋ 添加安排</el-button>
       </div>
       <!-- 未设置排班：可约时段按默认 9:00-18:00 计算，提示去设置 -->
-      <div v-if="tl?.scheduleBasis === 'default'" class="myday-sched-tip">
+      <div v-if="view === 'day' && tl?.scheduleBasis === 'default'" class="myday-sched-tip">
         你还没有设置工作排班，「可约时段」按默认 <b>工作日 9:00-18:00</b> 计算。
         打开智能体里的「我的日程」小助理，说「设置排班」即可自定义。
       </div>
     </div>
 
-    <!-- 主视图：一天的时间轴（四类条目分层，按开始时间排序） -->
-    <div class="page-card" v-loading="loading">
+    <!-- 月历视图：整月摊开（过去 + 未来都在同一屏），点日期进入该日时间轴 -->
+    <div v-if="view === 'month'" class="page-card" v-loading="monthLoading">
+      <div class="month-grid">
+        <div v-for="w in DOW" :key="w" class="month-dow" :class="{ sun: w === '日' }">{{ w }}</div>
+        <div
+          v-for="c in monthCells"
+          :key="c.key"
+          class="month-cell"
+          :class="{ out: !c.inMonth, today: c.key === today, has: c.day?.total }"
+          @click="c.inMonth && goDay(c.key)"
+        >
+          <div class="month-date" :class="{ sun: isSunday(c.key) }">{{ Number(c.key.slice(8)) }}</div>
+          <template v-if="c.day">
+            <div v-for="it in c.day.items.slice(0, 3)" :key="it.type + it.refId" class="month-chip" :class="'mc-' + it.type.toLowerCase()">
+              <span v-if="it.time" class="mc-time">{{ it.time }}</span><span class="mc-title">{{ it.title }}</span>
+            </div>
+            <div v-if="c.day.total > 3" class="month-more">还有 {{ c.day.total - 3 }} 项</div>
+          </template>
+        </div>
+      </div>
+      <div class="month-stats">
+        <span v-for="(v, k) in monthData?.stats ?? {}" :key="k" class="month-stat"><i class="lg" :class="statDot(k)"></i>{{ statLabel(k) }} {{ v }}</span>
+        <span class="muted month-stat-tip">点任意日期查看当天完整安排；点「单日」回到时间轴视图</span>
+      </div>
+    </div>
+
+    <!-- 主视图：一天的时间轴（四类条目分层，按开始时间排序）；月历模式下隐藏 -->
+    <div class="page-card" v-if="view === 'day'" v-loading="loading">
       <div v-if="!tl?.items?.length && !tl?.free?.length" class="myday-empty">
         这天还没有任何安排，点右上角「添加安排」把要做的事记进来。
       </div>
@@ -148,6 +186,71 @@ function rowKey(x: any) {
   return x.type;
 }
 
+/** ---- 视图切换与月历 ---- */
+const view = ref<'month' | 'day'>('month');
+const DOW = ['一', '二', '三', '四', '五', '六', '日'];
+const monthStr = ref(dayjs().format('YYYY-MM'));
+const monthData = ref<any>(null);
+const monthLoading = ref(false);
+const monthDayMap = computed(() => {
+  const m = new Map<string, any>();
+  for (const d of monthData.value?.days ?? []) m.set(d.date, d);
+  return m;
+});
+/** 6×7 网格：从当月 1 日所在周的周一开始（跨月日期弱化显示） */
+const monthCells = computed(() => {
+  const first = dayjs(monthStr.value + '-01');
+  const start = first.subtract((first.day() + 6) % 7, 'day');
+  const cells: { key: string; inMonth: boolean; day?: any }[] = [];
+  for (let i = 0; i < 42; i++) {
+    const d = start.add(i, 'day');
+    const key = d.format('YYYY-MM-DD');
+    cells.push({ key, inMonth: d.format('YYYY-MM') === monthStr.value, day: monthDayMap.value.get(key) });
+  }
+  return cells;
+});
+const STAT_META: Record<string, { label: string; dot: string }> = {
+  MEETING: { label: '会议', dot: 'lg-meeting' },
+  BOOKING: { label: '预约', dot: 'lg-booking' },
+  EVENT: { label: '安排', dot: 'lg-event' },
+  OUTING: { label: '外出', dot: 'lg-outing' },
+  TASK: { label: '任务截止', dot: 'lg-task' },
+  FREE: { label: '可约', dot: 'lg-free' },
+};
+const statLabel = (k: string) => STAT_META[k]?.label ?? k;
+const statDot = (k: string) => STAT_META[k]?.dot ?? 'lg-event';
+function isSunday(key: string) {
+  return dayjs(key).day() === 0;
+}
+async function loadMonth() {
+  monthLoading.value = true;
+  try {
+    monthData.value = await agentApi.monthSchedule(monthStr.value);
+  } catch {
+    /* 月历失败不打扰主视图 */
+  } finally {
+    monthLoading.value = false;
+  }
+}
+function shiftMonth(n: number) {
+  monthStr.value = dayjs(monthStr.value + '-01').add(n, 'month').format('YYYY-MM');
+  loadMonth();
+}
+function goThisMonth() {
+  monthStr.value = dayjs().format('YYYY-MM');
+  loadMonth();
+}
+function onViewChange(v: any) {
+  if (v === 'month') loadMonth();
+  else if (!tl.value) load();
+}
+/** 月历格点击 → 切到该日时间轴 */
+function goDay(key: string) {
+  dateStr.value = key;
+  view.value = 'day';
+  load();
+}
+
 /** 标签筛选（含各类型数量） */
 const filter = ref('ALL');
 const filters = computed(() => {
@@ -253,6 +356,7 @@ async function save() {
     else ElMessage.success(editId.value ? '已保存' : '已添加');
     dlg.value = false;
     load();
+    loadMonth();
   } catch (err: any) {
     formWarning.value = err?.response?.data?.message ?? err?.message ?? '保存失败';
   } finally {
@@ -270,6 +374,7 @@ async function removeEvent(it: any) {
     await agentApi.deleteEvent(it.refId);
     ElMessage.success('已删除');
     load();
+    loadMonth();
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message ?? '删除失败');
   }
@@ -282,6 +387,7 @@ async function quickOpen(d: any, f: any) {
     if (r?.warning) ElMessage.warning(r.warning);
     else ElMessage.success(`${d.date.slice(5)} ${f.time} 已开放可约`);
     load();
+    loadMonth();
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message ?? '开放失败');
   }
@@ -291,7 +397,10 @@ function goMeeting(it: any) {
   if (it.refId) router.push(`/meetings/${it.refId}`);
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  loadMonth();
+});
 defineExpose({ reload: load });
 </script>
 
@@ -337,6 +446,45 @@ defineExpose({ reload: load });
 .lg-outing { background: var(--el-color-danger); }
 .lg-task { background: #7f77dd; }
 .lg-free { background: var(--el-color-success-light-5); }
+
+/* ---- 月历视图 ---- */
+.myday-month-label { font-size: 15px; min-width: 78px; text-align: center; }
+.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.month-dow { text-align: center; font-size: 12px; color: var(--el-text-color-secondary); padding: 4px 0; }
+.month-dow.sun { color: var(--el-color-danger); }
+.month-cell {
+  min-height: 78px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px;
+  padding: 4px 5px; cursor: pointer; overflow: hidden; transition: background 0.15s;
+}
+.month-cell:hover { background: var(--el-color-primary-light-9); }
+.month-cell.out { opacity: 0.38; cursor: default; background: var(--el-fill-color-lighter); }
+.month-cell.out:hover { background: var(--el-fill-color-lighter); }
+.month-cell.today { border: 1.5px solid var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.month-date { font-size: 12px; font-weight: 500; color: var(--el-text-color-primary); margin-bottom: 3px; }
+.month-date.sun { color: var(--el-color-danger); }
+.month-cell.today .month-date { color: var(--el-color-primary); }
+.month-chip {
+  display: flex; align-items: center; gap: 3px; font-size: 11px; line-height: 1.5;
+  border-radius: 3px; padding: 0 4px; margin-top: 2px; white-space: nowrap; overflow: hidden;
+}
+.mc-time { flex-shrink: 0; opacity: 0.75; }
+.mc-title { overflow: hidden; text-overflow: ellipsis; }
+.mc-meeting { background: var(--el-color-primary-light-8); color: var(--el-color-primary-dark-2); border-left: 2px solid var(--el-color-primary); }
+.mc-booking { background: var(--el-color-success-light-8); color: var(--el-color-success-dark-2); border-left: 2px solid var(--el-color-success); }
+.mc-event { background: var(--el-color-warning-light-8); color: var(--el-color-warning-dark-2); border-left: 2px solid var(--el-color-warning); }
+.mc-outing { background: var(--el-color-danger-light-8); color: var(--el-color-danger-dark-2); border-left: 2px solid var(--el-color-danger); }
+.mc-task { background: var(--el-color-danger-light-8); color: #a32d2d; border-left: 2px solid #7f77dd; }
+.mc-free { background: var(--el-fill-color); color: var(--el-text-color-secondary); border-left: 2px solid var(--el-text-color-placeholder); }
+.month-more { font-size: 11px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.month-stats { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--el-border-color-lighter); font-size: 12px; color: var(--el-text-color-secondary); }
+.month-stat .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.month-stat-tip { margin-left: auto; }
+@media (max-width: 768px) {
+  .month-cell { min-height: 46px; padding: 3px; }
+  .month-chip { padding: 0 2px; }
+  .mc-time { display: none; }
+  .month-stat-tip { display: none; }
+}
 .myday-week-hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
 .myday-sec-title { font-weight: 500; font-size: 14px; }
 .myday-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }

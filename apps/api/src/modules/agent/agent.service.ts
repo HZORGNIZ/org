@@ -2037,6 +2037,125 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     return { days, today: fmtBeijingDate(this.bjDayStart()) };
   }
 
+  /**
+   * 我的整月日程总览（月历视图）：一次范围查询拉全月 会议/预约/个人日程/任务截止，按天分组。
+   * 与 buildDayTimeline 的区别：不逐日算空余（月历格不需要），条目为轻量结构。
+   */
+  async getMonthTimeline(me: CurrentUserPayload, monthStr?: string) {
+    await this.assertVisible(me);
+    const mt = /^(\d{4})-(\d{2})$/.exec(String(monthStr ?? '').slice(0, 7));
+    const firstDay = mt
+      ? this.parseBjDay(`${mt[1]}-${mt[2]}-01`)!
+      : this.parseBjDay(`${fmtBeijingDate(this.bjDayStart()).slice(0, 7)}-01`)!;
+    const y = firstDay.getUTCFullYear();
+    const mo = firstDay.getUTCMonth();
+    const daysInMonth = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+    const monthEnd = new Date(firstDay.getTime() + daysInMonth * 86400000);
+    const userId = me.id;
+
+    const [meetings, bookings, events, dueTasks] = await Promise.all([
+      this.prisma.meeting.findMany({
+        where: {
+          deletedAt: null,
+          status: { notIn: ['CANCELLED'] },
+          startAt: { lt: monthEnd },
+          endAt: { gt: firstDay },
+          OR: [{ ownerId: userId }, { participantIds: { has: userId } }],
+        },
+        orderBy: { startAt: 'asc' },
+        select: { id: true, title: true, location: true, startAt: true, endAt: true, status: true },
+      }),
+      this.prisma.meetingBooking.findMany({
+        where: {
+          status: { in: ['PENDING', 'CONFIRMED'] },
+          startAt: { lt: monthEnd },
+          endAt: { gt: firstDay },
+          OR: [{ ownerId: userId }, { requesterId: userId }],
+        },
+        orderBy: { startAt: 'asc' },
+        select: { id: true, title: true, startAt: true, endAt: true, status: true, ownerId: true, requesterId: true, owner: { select: { name: true } }, requester: { select: { name: true } } },
+      }),
+      this.prisma.personalEvent.findMany({
+        where: { userId, date: { gte: firstDay, lt: monthEnd } },
+        orderBy: { startMin: 'asc' },
+      }),
+      this.prisma.task.findMany({
+        where: { assigneeId: userId, status: { not: 'DONE' }, dueDate: { gte: firstDay, lt: monthEnd } },
+        select: { id: true, title: true, dueDate: true, project: { select: { name: true } } },
+        orderBy: { dueDate: 'asc' },
+      }),
+    ]);
+
+    const bjDateOf = (d: Date) => fmtBeijingDate(d);
+    const buckets = new Map<string, any[]>();
+    const dayKeys: string[] = [];
+    for (let i = 0; i < daysInMonth; i++) {
+      const k = bjDateOf(this.addDays(firstDay, i));
+      dayKeys.push(k);
+      buckets.set(k, []);
+    }
+    const pushTo = (dates: string[], item: any) => {
+      for (const k of dates) buckets.get(k)?.push({ ...item });
+    };
+    // 跨天条目落到其覆盖的每一天（封顶 31 天防爆量）
+    const coveredDays = (s: Date, e: Date) => {
+      const out: string[] = [];
+      for (let i = 0; i < daysInMonth; i++) {
+        const d = this.addDays(firstDay, i);
+        const dEnd = this.addDays(d, 1);
+        if (e.getTime() > d.getTime() && s.getTime() < dEnd.getTime()) out.push(bjDateOf(d));
+      }
+      return out.slice(0, 31);
+    };
+
+    for (const m of meetings) {
+      pushTo(coveredDays(m.startAt, m.endAt), {
+        type: 'MEETING', refId: m.id, title: m.title, location: m.location ?? null,
+        time: `${fmtBeijing(m.startAt).slice(11, 16)}-${fmtBeijing(m.endAt).slice(11, 16)}`,
+      });
+    }
+    for (const b of bookings) {
+      const asOwner = b.ownerId === userId;
+      const who = asOwner ? b.requester?.name ?? '成员' : b.owner?.name ?? '';
+      pushTo(coveredDays(b.startAt, b.endAt), {
+        type: 'BOOKING', refId: b.id, direction: asOwner ? 'IN' : 'OUT', who,
+        title: b.title || (asOwner ? `${who} 约我` : `我约 ${who}`),
+        status: b.status,
+        time: `${fmtBeijing(b.startAt).slice(11, 16)}-${fmtBeijing(b.endAt).slice(11, 16)}`,
+      });
+    }
+    for (const t of dueTasks) {
+      if (!t.dueDate) continue;
+      pushTo([bjDateOf(t.dueDate)], {
+        type: 'TASK', refId: t.id, title: t.title, projectName: t.project?.name ?? null,
+        time: fmtBeijing(t.dueDate).slice(11, 16),
+      });
+    }
+    for (const ev of events) {
+      pushTo([bjDateOf(ev.date)], {
+        type: ev.kind === 'FREE' ? 'FREE' : ev.kind === 'OUTING' ? 'OUTING' : 'EVENT',
+        refId: ev.id, kind: ev.kind, title: ev.title || this.eventKindCn(ev.kind), note: ev.note ?? null,
+        time: ev.startMin ? `${fmtMinuteOfDay(ev.startMin)}-${fmtMinuteOfDay(ev.endMin)}` : '',
+        allDay: !ev.startMin,
+      });
+    }
+
+    const days = dayKeys.map((k) => {
+      const items = buckets.get(k) ?? [];
+      const counts: Record<string, number> = {};
+      for (const it of items) counts[it.type] = (counts[it.type] ?? 0) + 1;
+      return { date: k, items, counts, total: items.length };
+    });
+    const stats: Record<string, number> = {};
+    for (const d of days) for (const [k, v] of Object.entries(d.counts)) stats[k] = (stats[k] ?? 0) + v;
+    return {
+      month: bjDateOf(firstDay).slice(0, 7),
+      days,
+      stats,
+      today: fmtBeijingDate(this.bjDayStart()),
+    };
+  }
+
   /** 新增个人日程/可约时段；与会议/预约/已有日程冲突时返回 warning（不硬拦，由用户决定） */
   async createEvent(me: CurrentUserPayload, body: { date?: string; startMin?: number | string; endMin?: number | string; kind?: string; title?: string; note?: string; source?: string }) {
     await this.assertVisible(me);

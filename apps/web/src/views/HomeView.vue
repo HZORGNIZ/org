@@ -891,7 +891,6 @@ const quickGroups = computed(() => [
     title: '团队协作',
     items: [
       { label: '部门', icon: 'OfficeBuilding', path: deptPath.value, color: '#67c23a', bg: '#f0f9eb' },
-      { label: '复盘', icon: 'RefreshLeft', path: '/retrospectives', color: '#e6a23c', bg: '#fdf6ec' },
       { label: 'SOP', icon: 'Collection', path: '/sops', color: '#e6a23c', bg: '#fdf6ec' },
       { label: '知识库', icon: 'Notebook', path: '/knowledge', color: '#428bff', bg: '#ecf5ff' },
       { label: '行业资讯', icon: 'Promotion', path: '/news', color: '#f56c6c', bg: '#fef0f0' },
@@ -920,11 +919,10 @@ const createForm = reactive({ title: '', content: '', pinned: false, expiresAt: 
 const taskDrawer = ref(false);
 const taskId = ref<string | null>(null);
 
-// ---- 顶部 AI 录入（文字 + 语音）---- 写日报入口已移到工作台（日报 tab），首页不再放日报预设
+// ---- 顶部 AI 录入（文字 + 语音）---- 写日报已移到工作台（日报 tab）、灵感已移到工作台（灵感 tab），首页预设只留周报/任务
 const INTAKE_PRESETS = [
   { value: 'WEEKLY', label: '周报', icon: 'Calendar' },
   { value: 'TASK', label: '任务', icon: 'List' },
-  { value: 'IDEA', label: '灵感', icon: 'Sunny' },
 ];
 // 日报工时快捷档位（选完直接跟着录入一起落库，不用录入后再回来改）
 const HOUR_OPTIONS = [1, 2, 4, 6, 8];
