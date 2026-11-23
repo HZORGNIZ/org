@@ -4074,6 +4074,47 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     return { asOwner: asOwner.map(view), asRequester: asRequester.map(view) };
   }
 
+  /** 预约卡片时间行：'11月24日（周一）14:00-15:00'；跨天时结束侧带日期 */
+  private bookingCardTime(sv: Date, ev: Date): string {
+    const s = fmtBeijing(sv);
+    const e = fmtBeijing(ev);
+    const wd = '周' + '一二三四五六日'[new Date(sv.getTime() + CN_OFFSET_MS).getUTCDay()];
+    const sameDay = s.slice(0, 10) === e.slice(0, 10);
+    const endText = sameDay ? e.slice(11, 16) : `${Number(e.slice(5, 7))}月${Number(e.slice(8, 10))}日 ${e.slice(11, 16)}`;
+    return `${Number(s.slice(5, 7))}月${Number(s.slice(8, 10))}日（${wd}）${s.slice(11, 16)}-${endText}`;
+  }
+
+  /** 预约群通知卡片（纯文本卡片式排版：谁约的/约的谁/时间/事项/状态；dws 群发仅支持纯文本） */
+  private bookingCard(opts: {
+    status: 'PENDING' | 'CONFIRMED' | 'REJECTED';
+    requester: string;
+    owner: string;
+    time: string;
+    title: string;
+    note?: string | null;
+    decideNote?: string | null;
+  }): string {
+    const head =
+      opts.status === 'PENDING' ? '📋 沟通预约卡（待确认）' : opts.status === 'CONFIRMED' ? '✅ 沟通预约卡（已确认）' : '❌ 沟通预约卡（已取消）';
+    const status =
+      opts.status === 'PENDING'
+        ? `⏳ 状态：待 ${opts.owner}老师 确认后生效`
+        : opts.status === 'CONFIRMED'
+          ? '✅ 状态：已确认，双方时间已锁定'
+          : `🚫 状态：已取消，该时段空出${opts.decideNote ? `（原因：${opts.decideNote}）` : ''}`;
+    const lines = [
+      head,
+      '──────────────',
+      `👤 谁约的：${opts.requester}`,
+      `🎯 约的谁：${opts.owner}老师`,
+      `🕐 时间：${opts.time}`,
+      `📝 事项：${opts.title}`,
+    ];
+    if (opts.note) lines.push(`📎 补充：${opts.note}`);
+    lines.push(status);
+    return lines.join('\n');
+  }
+
   /** 发起预约（成员）：先查冲突再建单，钉钉私聊通知老师；老师确认后才算数 */
   async createBooking(me: CurrentUserPayload, body: { ownerId?: string; startAt?: string; endAt?: string; title?: string; note?: string }) {
     await this.assertVisible(me);
@@ -4122,9 +4163,14 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       if (push) {
         await this.dm.sendGroup(
           push.conversationId,
-          `【沟通预约 · 待确认】${me.name} 约了 ${owner.name}老师 ${fmtBeijing(sv).slice(0, 16)}-${fmtBeijing(ev).slice(11, 16)}\n事项：${title}${
-            materialTip ? `\n提示：${materialTip}` : ''
-          }\n（待 ${owner.name}老师确认后生效）`,
+          this.bookingCard({
+            status: 'PENDING',
+            requester: me.name,
+            owner: owner.name,
+            time: this.bookingCardTime(sv, ev),
+            title,
+            note,
+          }),
         );
       } else {
         this.logger.warn('项目PUSH群未解析到，预约群通知跳过');
@@ -4189,9 +4235,14 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       if (push) {
         await this.dm.sendGroup(
           push.conversationId,
-          approve
-            ? `【沟通预约 · 已确认】${row.requester.name} 与 ${row.owner.name}老师 ${timeText} 的沟通（${row.title}）已确认。`
-            : `【沟通预约 · 已驳回】${row.requester.name} 原约 ${row.owner.name}老师 ${timeText} 的沟通（${row.title}）已取消，该时段空出。${note ? `原因：${note}` : ''}`,
+          this.bookingCard({
+            status: approve ? 'CONFIRMED' : 'REJECTED',
+            requester: row.requester.name,
+            owner: row.owner.name,
+            time: this.bookingCardTime(row.startAt, row.endAt),
+            title: row.title,
+            decideNote: note,
+          }),
         );
       }
     } catch (e: any) {
