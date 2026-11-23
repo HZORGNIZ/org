@@ -8,7 +8,7 @@
     </div>
 
     <div v-if="embedded" class="task-embedded-bar">
-      <span class="task-embedded-hint">任务列表 / 看板 / 我的日程 / 成员总览</span>
+      <span class="task-embedded-hint">任务列表 / 看板 / 成员总览</span>
       <el-button type="primary" size="small" @click="showForm = true">
         <el-icon><Plus /></el-icon>&nbsp;新建任务
       </el-button>
@@ -194,11 +194,6 @@
         <TaskBoardPanel ref="boardRef" @open-task="openTask" />
       </el-tab-pane>
 
-      <!-- 我的日程：一天的工作行程（会议/预约/外出/任务截止/我的安排/空余），信息与智能体「我的日程」打通 -->
-      <el-tab-pane label="我的日程" name="myday" lazy>
-        <MyScheduleTab />
-      </el-tab-pane>
-
       <!-- 成员任务总览：按部门手风琴分组的全员任务/完成度/本周工时/PBC（管理员与部门负责人/共管人可见） -->
       <el-tab-pane v-if="auth.isAdmin || auth.isDeptLeader" label="成员总览" name="overview" lazy>
         <MemberTaskOverview @open-task="openTask" @open-member="(id: string) => router.push(`/members/${id}`)" />
@@ -224,28 +219,27 @@ import TaskDetailDrawer from '../components/TaskDetailDrawer.vue';
 import TaskBoardPanel from '../components/TaskBoardPanel.vue';
 import MemberTaskOverview from '../components/MemberTaskOverview.vue';
 import TaskUpdatePopover from '../components/TaskUpdatePopover.vue';
-import MyScheduleTab from '../components/MyScheduleTab.vue';
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-/** 大 tab：任务列表 / 任务看板 / 我的日程 / 成员总览；与地址栏 ?tab=board|myday|overview 同步（首页等入口直达）
- *  内嵌模式（embedded）：本视图被工作台「任务」大 tab 复用时，URL 归工作台管，子切换不再写地址栏 */
-type TabKey = 'list' | 'board' | 'myday' | 'overview';
+/** 大 tab：任务列表 / 任务看板 / 成员总览；与地址栏 ?tab=board|overview 同步（首页等入口直达）
+ *  内嵌模式（embedded）：本视图被工作台「任务」大 tab 复用时，URL 归工作台管，子切换不再写地址栏
+ *  （我的日程已上提为工作台第一个大 tab，不再作为本视图子页） */
+type TabKey = 'list' | 'board' | 'overview';
 const props = defineProps<{ embedded?: boolean; initialTab?: TabKey }>();
 const tab = ref<TabKey>(
   props.initialTab ??
-    (route.query.tab === 'board' ? 'board' : route.query.tab === 'myday' ? 'myday' : route.query.tab === 'overview' ? 'overview' : 'list'),
+    (route.query.tab === 'board' ? 'board' : route.query.tab === 'overview' ? 'overview' : 'list'),
 );
 const boardRef = ref<InstanceType<typeof TaskBoardPanel> | null>(null);
 
 function onTabChange(name: any) {
-  tab.value = name === 'board' ? 'board' : name === 'myday' ? 'myday' : name === 'overview' ? 'overview' : 'list';
+  tab.value = name === 'board' ? 'board' : name === 'overview' ? 'overview' : 'list';
   if (props.embedded) return;
   const q = { ...route.query };
   if (tab.value === 'board') q.tab = 'board';
-  else if (tab.value === 'myday') q.tab = 'myday';
   else if (tab.value === 'overview') q.tab = 'overview';
   else delete q.tab;
   router.replace({ query: q });
@@ -256,7 +250,7 @@ watch(
   () => route.query.tab,
   (v) => {
     if (props.embedded) return;
-    const t: TabKey = v === 'board' ? 'board' : v === 'myday' ? 'myday' : v === 'overview' ? 'overview' : 'list';
+    const t: TabKey = v === 'board' ? 'board' : v === 'overview' ? 'overview' : 'list';
     if (t !== tab.value) tab.value = t;
   },
 );

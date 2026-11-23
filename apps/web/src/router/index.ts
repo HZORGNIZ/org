@@ -31,7 +31,10 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'home', component: () => import('../views/HomeView.vue') },
       { path: 'ideas', name: 'ideas', component: () => import('../views/IdeasView.vue') },
       // 任务页已并入「工作台」的任务大 tab：旧菜单/书签统一跳过去（子 tab 用 ttab 带给内嵌视图）
-      { path: 'tasks', redirect: (to) => ({ name: 'reports', query: { ...to.query, tab: 'task', ttab: to.query.tab } }) },
+      // 我的日程已上提为工作台第一个大 tab：/tasks?tab=myday → /reports?tab=myschedule，其余子页继续映射进任务 tab
+      { path: 'tasks', redirect: (to) => (to.query.tab === 'myday'
+        ? { name: 'reports', query: { tab: 'myschedule' } }
+        : { name: 'reports', query: { ...to.query, tab: 'task', ttab: to.query.tab } }) },
       { path: 'board', redirect: { name: 'reports', query: { tab: 'task', ttab: 'board' } } },
       { path: 'projects', name: 'projects', component: () => import('../views/ProjectsView.vue') },
       { path: 'projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetailView.vue') },
