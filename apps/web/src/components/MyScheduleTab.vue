@@ -10,7 +10,13 @@
         <span class="myday-weekday">{{ tl?.weekday }}</span>
       </div>
       <div class="myday-stats">
-        <span class="stat-chip" v-for="s in statChips" :key="s.label" :class="s.cls">{{ s.label }} {{ s.n }}</span>
+        <button
+          v-for="f in filters"
+          :key="f.key"
+          class="stat-chip"
+          :class="[f.cls, { active: filter === f.key }]"
+          @click="filter = f.key"
+        >{{ f.label }} {{ f.n }}</button>
         <el-button type="primary" size="small" @click="openAdd()">＋ 添加安排</el-button>
       </div>
     </div>
@@ -28,9 +34,12 @@
             <span v-if="it.statusCn" class="myday-status" :class="'st-' + it.status?.toLowerCase()">{{ it.statusCn }}</span>
             <span v-if="it.note" class="myday-note">{{ it.note }}</span>
             <span v-if="it.type === 'MEETING'" class="myday-link">详情 →</span>
-            <!-- 空余时段：一键设为可约（开放给同事约会议） -->
-            <el-button v-if="it.type === 'FREE' && !it.openForBooking" size="small" text type="success" @click.stop="openAddFree(it)">设为可约</el-button>
-            <el-tag v-else-if="it.type === 'FREE' && it.openForBooking" size="small" type="success" effect="light">可约</el-tag>
+            <!-- 空余时段：一键设为可约（开放给同事约会议）／快捷记安排 -->
+            <template v-if="it.type === 'FREE'">
+              <el-button v-if="!it.openForBooking" size="small" text type="success" @click.stop="openAddFree(it)">设为可约</el-button>
+              <el-tag v-else size="small" type="success" effect="light">可约</el-tag>
+              <el-button size="small" text type="primary" @click.stop="openAddAt(it)">＋安排</el-button>
+            </template>
             <!-- 个人日程：编辑/删除 -->
             <template v-if="it.type === 'EVENT'">
               <el-button size="small" text @click.stop="openEdit(it)">编辑</el-button>
@@ -44,8 +53,9 @@
         <span><i class="lg lg-meeting"></i>会议</span>
         <span><i class="lg lg-booking"></i>沟通预约</span>
         <span><i class="lg lg-event"></i>我的安排</span>
-        <span><i class="lg lg-work"></i>上班时间</span>
-        <span><i class="lg lg-free"></i>空余</span>
+        <span><i class="lg lg-outing"></i>外出</span>
+        <span><i class="lg lg-task"></i>任务截止</span>
+        <span><i class="lg lg-free"></i>空余/可约</span>
       </div>
     </div>
 
@@ -81,6 +91,7 @@
         <el-form-item label="类型">
           <el-radio-group v-model="form.kind" :disabled="!!editId">
             <el-radio value="EVENT">日程安排</el-radio>
+            <el-radio value="OUTING">外出</el-radio>
             <el-radio value="FREE">开放可约</el-radio>
             <el-radio value="BUSY">占用</el-radio>
           </el-radio-group>
@@ -126,22 +137,34 @@ const editId = ref('');
 const formWarning = ref('');
 const form = ref({ kind: 'EVENT', title: '', note: '', start: '', end: '' });
 
-const statChips = computed(() => {
+/** 行的标签归类：日程里 EVENT 按 kind 细分（安排/外出/可约），其余按 type */
+function rowKey(x: any) {
+  if (x.type === 'EVENT') return x.kind === 'FREE' ? 'FREE' : x.kind === 'OUTING' ? 'OUTING' : 'EVENT';
+  return x.type;
+}
+
+/** 标签筛选（含各类型数量） */
+const filter = ref('ALL');
+const filters = computed(() => {
   const items = tl.value?.items ?? [];
   return [
-    { label: '会议', n: items.filter((x: any) => x.type === 'MEETING').length, cls: 'c-meeting' },
-    { label: '预约', n: items.filter((x: any) => x.type === 'BOOKING').length, cls: 'c-booking' },
-    { label: '我的安排', n: items.filter((x: any) => x.type === 'EVENT' && x.kind === 'EVENT').length, cls: 'c-event' },
-    { label: '空余', n: tl.value?.free?.length ?? 0, cls: 'c-free' },
+    { key: 'ALL', label: '全部', n: items.length, cls: '' },
+    { key: 'MEETING', label: '会议', n: items.filter((x: any) => x.type === 'MEETING').length, cls: 'c-meeting' },
+    { key: 'BOOKING', label: '预约', n: items.filter((x: any) => x.type === 'BOOKING').length, cls: 'c-booking' },
+    { key: 'EVENT', label: '安排', n: items.filter((x: any) => x.type === 'EVENT' && x.kind === 'EVENT').length, cls: 'c-event' },
+    { key: 'OUTING', label: '外出', n: items.filter((x: any) => x.type === 'EVENT' && x.kind === 'OUTING').length, cls: 'c-outing' },
+    { key: 'TASK', label: '任务', n: items.filter((x: any) => x.type === 'TASK').length, cls: 'c-task' },
+    { key: 'FREE', label: '可约', n: tl.value?.free?.length ?? 0, cls: 'c-free' },
   ];
 });
 
-/** 时间轴合并视图：具体条目 + 空余段，按开始分钟排序；空余段补全展示字段 */
+/** 时间轴合并视图：具体条目 + 空余段，按开始分钟排序；空余段补全展示字段；按标签筛选 */
 const mergedRows = computed(() => {
-  const items = (tl.value?.items ?? []).map((x: any) => ({ ...x }));
+  let items: any[] = (tl.value?.items ?? []).map((x: any) => ({ ...x }));
   for (const f of tl.value?.free ?? []) {
     items.push({ type: 'FREE', startMin: f.startMin, endMin: f.endMin, time: f.time, label: f.openForBooking ? '空余 · 已开放可约' : '空余', openForBooking: f.openForBooking });
   }
+  if (filter.value !== 'ALL') items = items.filter((x: any) => rowKey(x) === filter.value);
   return items.sort((a: any, b: any) => a.startMin - b.startMin || a.endMin - b.endMin);
 });
 
@@ -190,6 +213,13 @@ function openAddFree(f: any) {
   editId.value = '';
   formWarning.value = '';
   form.value = { kind: 'FREE', title: '', note: '', start: minToHHmm(f.startMin), end: minToHHmm(f.endMin) };
+  dlg.value = true;
+}
+/** 点空余时段的「＋安排」：时段预填，直接记个人安排 */
+function openAddAt(f: any) {
+  editId.value = '';
+  formWarning.value = '';
+  form.value = { kind: 'EVENT', title: '', note: '', start: minToHHmm(f.startMin), end: minToHHmm(f.endMin) };
   dlg.value = true;
 }
 function openEdit(it: any) {
@@ -266,10 +296,13 @@ defineExpose({ reload: load });
 .myday-nav { display: flex; align-items: center; gap: 8px; }
 .myday-weekday { color: var(--el-text-color-secondary); font-size: 13px; margin-left: 4px; }
 .myday-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.stat-chip { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); }
+.stat-chip { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); border: 1px solid transparent; cursor: pointer; }
+.stat-chip.active { border-color: var(--el-color-primary); color: var(--el-color-primary); font-weight: 500; }
 .stat-chip.c-meeting { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .stat-chip.c-booking { background: var(--el-color-success-light-9); color: var(--el-color-success); }
 .stat-chip.c-event { background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); }
+.stat-chip.c-outing { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+.stat-chip.c-task { background: #f3f2fc; color: #6a62c9; }
 .stat-chip.c-free { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
 .myday-empty { color: var(--el-text-color-secondary); font-size: 13px; padding: 18px 0; text-align: center; }
 .myday-timeline { display: flex; flex-direction: column; gap: 8px; }
@@ -279,7 +312,8 @@ defineExpose({ reload: load });
 .myday-item.item-MEETING { background: var(--el-color-primary-light-9); border-left-color: var(--el-color-primary); cursor: pointer; }
 .myday-item.item-BOOKING { background: var(--el-color-success-light-9); border-left-color: var(--el-color-success); }
 .myday-item.item-EVENT { background: var(--el-color-warning-light-9); border-left-color: var(--el-color-warning); }
-.myday-item.item-WORK { background: var(--el-fill-color-light); border-left-color: var(--el-border-color-darker); }
+.myday-item.item-OUTING { background: var(--el-color-danger-light-9); border-left-color: var(--el-color-danger); }
+.myday-item.item-TASK { background: #f3f2fc; border-left-color: #7f77dd; }
 .myday-item.item-FREE { background: var(--el-fill-color-light); border-left-style: dashed; border-left-color: var(--el-color-success); }
 .myday-label { font-size: 13px; color: var(--el-text-color-primary); }
 .myday-status { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--el-fill-color); color: var(--el-text-color-secondary); }
@@ -294,7 +328,8 @@ defineExpose({ reload: load });
 .lg-meeting { background: var(--el-color-primary); }
 .lg-booking { background: var(--el-color-success); }
 .lg-event { background: var(--el-color-warning); }
-.lg-work { background: var(--el-border-color-darker); }
+.lg-outing { background: var(--el-color-danger); }
+.lg-task { background: #7f77dd; }
 .lg-free { background: var(--el-color-success-light-5); }
 .myday-week-hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
 .myday-sec-title { font-weight: 500; font-size: 14px; }

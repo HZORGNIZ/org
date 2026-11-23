@@ -1882,11 +1882,11 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
 
   /** 个人事件/时段的展示标签 */
   private eventKindCn(kind: string) {
-    return kind === 'FREE' ? '开放可约' : kind === 'BUSY' ? '占用' : '日程安排';
+    return kind === 'FREE' ? '开放可约' : kind === 'BUSY' ? '占用' : kind === 'OUTING' ? '外出' : '日程安排';
   }
 
   /**
-   * 某人某天的完整时间轴：上班排班 + 我发布的会议 + 别人约我的 + 我约别人的 + 个人日程 + 空余计算
+   * 某人某天的完整时间轴：我发布的会议 + 别人约我的 + 我约别人的 + 个人日程/外出 + 当天到期任务 + 空余计算
    * 会议含「我发起的」与「我参加的」（participantIds）；预约含「别人约我的（PENDING/CONFIRMED）」与「我约别人的（CONFIRMED）」
    */
   private async buildDayTimeline(userId: string, day: Date) {
@@ -1923,9 +1923,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       this.prisma.personalEvent.findMany({ where: { userId, date: day }, orderBy: { startMin: 'asc' } }),
     ]);
     const items: any[] = [];
-    for (const w of workSlots) {
-      items.push({ type: 'WORK', startMin: w.startMin, endMin: w.endMin, label: '上班时间', time: slotRangeLabel(w.startMin, w.endMin) });
-    }
     for (const m of meetings) {
       items.push({
         type: 'MEETING',
@@ -1955,6 +1952,29 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         status: b.status,
         statusCn: stCn,
         time: slotRangeLabel(toMin(b.startAt), toMin(b.endAt)),
+      });
+    }
+    // 我名下当天到期的任务（未完成）：也进日程，提醒「今天有要交的活」
+    const dueTasks = await this.prisma.task.findMany({
+      where: {
+        assigneeId: userId,
+        status: { not: 'DONE' },
+        dueDate: { gte: day, lt: dayEnd },
+      },
+      select: { id: true, title: true, dueDate: true, project: { select: { name: true } } },
+      orderBy: { dueDate: 'asc' },
+    });
+    for (const t of dueTasks) {
+      const m = toMin(t.dueDate);
+      items.push({
+        type: 'TASK',
+        refId: t.id,
+        startMin: m,
+        endMin: Math.min(m + 60, 1440),
+        label: `任务截止 · ${t.title}${t.project?.name ? `（${t.project.name}）` : ''}`,
+        title: t.title,
+        projectName: t.project?.name ?? null,
+        time: slotRangeLabel(m, Math.min(m + 60, 1440)),
       });
     }
     for (const ev of events) {
@@ -2017,7 +2037,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     const endMin = this.parseClockToMin(body?.endMin);
     if (startMin === null || endMin === null || endMin <= startMin) throw new BadRequestException('时段不合法，结束须晚于开始');
     if (endMin > 1440) throw new BadRequestException('时段不能跨天，请拆成两条');
-    const kind = ['EVENT', 'FREE', 'BUSY'].includes(String(body?.kind ?? '').toUpperCase()) ? String(body.kind).toUpperCase() : 'EVENT';
+    const kind = ['EVENT', 'FREE', 'BUSY', 'OUTING'].includes(String(body?.kind ?? '').toUpperCase()) ? String(body.kind).toUpperCase() : 'EVENT';
     const title = String(body?.title ?? '').trim().slice(0, 80) || (kind === 'EVENT' ? '' : '');
     if (kind === 'EVENT' && title.length < 2) throw new BadRequestException('请写清楚这个时间要做什么（事项至少 2 个字）');
     const sv = new Date(day.getTime() + startMin * 60000);
@@ -2061,7 +2081,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       data.title = title || row.title;
     }
     if (body?.note !== undefined) data.note = String(body.note ?? '').trim().slice(0, 300) || null;
-    if (body?.kind !== undefined && ['EVENT', 'FREE', 'BUSY'].includes(String(body.kind).toUpperCase())) data.kind = String(body.kind).toUpperCase();
+    if (body?.kind !== undefined && ['EVENT', 'FREE', 'BUSY', 'OUTING'].includes(String(body.kind).toUpperCase())) data.kind = String(body.kind).toUpperCase();
     await this.prisma.personalEvent.update({ where: { id: row.id }, data });
     return { ok: true };
   }
@@ -3838,7 +3858,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       return { kind: 'EVENT_CREATE', needClarify: 'time', reason: '时段不明确，请确认开始/结束时间（如「15:00-16:00」）' };
     }
     if (endMin > 1440) return { kind: 'EVENT_CREATE', needClarify: 'time', reason: '时段不能跨天，请拆成两条分别添加' };
-    const kind = ['EVENT', 'FREE', 'BUSY'].includes(String(a.kind ?? 'EVENT').toUpperCase()) ? String(a.kind).toUpperCase() : 'EVENT';
+    const kind = ['EVENT', 'FREE', 'BUSY', 'OUTING'].includes(String(a.kind ?? 'EVENT').toUpperCase()) ? String(a.kind).toUpperCase() : 'EVENT';
     const title = String(a.title ?? '').trim().slice(0, 80);
     if (kind === 'EVENT' && title.length < 2) {
       return { kind: 'EVENT_CREATE', needClarify: 'title', reason: '请写清楚这个时间要做什么（如「写季度总结」），不能只说「安排一下」' };
