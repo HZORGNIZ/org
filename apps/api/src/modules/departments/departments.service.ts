@@ -175,6 +175,7 @@ export class DepartmentsService {
       });
     }
     for (const h of hoursByUser) {
+      if (!h.ownerId) continue; // groupBy 结果 ownerId 可空（类型收窄）
       const row = rows.get(h.ownerId);
       if (row) row.weekHours = Math.round((h._sum.hours ?? 0) * 10) / 10;
     }
