@@ -1965,6 +1965,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       orderBy: { dueDate: 'asc' },
     });
     for (const t of dueTasks) {
+      if (!t.dueDate) continue; // 查询条件限定 dueDate 非空，这里仅为类型收窄
       const m = toMin(t.dueDate);
       items.push({
         type: 'TASK',
