@@ -5,7 +5,11 @@
       <div class="mto-total"><span class="lbl">在职成员</span><b>{{ ov?.totals?.members ?? 0 }}</b></div>
       <div class="mto-total"><span class="lbl">进行中任务</span><b class="c-open">{{ ov?.totals?.open ?? 0 }}</b></div>
       <div class="mto-total"><span class="lbl">已逾期</span><b class="c-over">{{ ov?.totals?.overdue ?? 0 }}</b></div>
-      <div class="mto-total"><span class="lbl">本周工时</span><b>{{ ov?.totals?.weekHours ?? 0 }}h</b></div>
+      <div class="mto-total">
+        <span class="lbl">本周工时</span>
+        <b v-if="isWeekStart && !(ov?.totals?.weekHours ?? 0) && (ov?.totals?.prevWeekHours ?? 0) > 0" class="c-muted">上周 {{ ov?.totals?.prevWeekHours }}h</b>
+        <b v-else>{{ ov?.totals?.weekHours ?? 0 }}h</b>
+      </div>
       <div class="mto-ops">
         <el-button size="small" text type="primary" @click="expandAll(true)">全部展开</el-button>
         <el-button size="small" text @click="expandAll(false)">全部收起</el-button>
@@ -21,7 +25,8 @@
         <span class="dept-sum">
           {{ d.memberCount }}人 · <b class="c-open">{{ d.stats.open }}</b> 进行中
           <template v-if="d.stats.overdue"> · <b class="c-over">{{ d.stats.overdue }} 个逾期</b></template>
-          · 本周 {{ d.stats.weekHours }}h
+          · <template v-if="isWeekStart && !d.stats.weekHours && d.stats.prevWeekHours > 0">上周 {{ d.stats.prevWeekHours }}h</template>
+          <template v-else>本周 {{ d.stats.weekHours }}h</template>
         </span>
         <span class="dept-rate">完成率 {{ d.completionRate }}%</span>
       </div>
@@ -54,7 +59,20 @@
             <div class="bar"><i :class="rateCls(m)" :style="{ width: rateOf(m) + '%' }"></i></div>
             <span class="bar-txt">完成 {{ m.doneCount }}/{{ m.doneCount + m.openCount }}</span>
           </div>
-          <span class="mto-hours">本周 {{ m.weekHours }}h</span>
+          <div class="mto-hours-cell">
+            <span v-if="m.weekHours > 0" class="mto-hours">本周 {{ m.weekHours }}h</span>
+            <span v-else-if="m.prevWeekHours > 0" class="mto-hours c-muted" title="本周还没有工时，显示上周数据">上周 {{ m.prevWeekHours }}h</span>
+            <span v-else class="mto-hours c-muted">本周 0h</span>
+            <el-tag v-if="!m.dailySubmitted" size="small" type="danger" effect="plain" class="daily-tag">未交日报</el-tag>
+            <el-button
+              v-if="!m.dailySubmitted"
+              size="small"
+              text
+              type="primary"
+              :loading="reminding === m.id"
+              @click.stop="remindDaily(m)"
+            >催一下</el-button>
+          </div>
         </div>
         <div v-if="!d.members.length" class="task-none" style="padding: 10px 14px;">本部门暂无在职成员</div>
       </div>
@@ -65,14 +83,17 @@
       <div v-for="r in ov.ranking" :key="r.id" class="rank-row">
         <span class="rank-name">{{ r.name }}</span>
         <div class="rank-bar"><i :style="{ width: rankW(r) + '%' }"></i></div>
-        <span class="rank-num">{{ r.weekHours }}h · {{ r.memberCount }}人</span>
+        <span class="rank-num">
+          <template v-if="isWeekStart && !r.weekHours && r.prevWeekHours > 0">上周 {{ r.prevWeekHours }}h · {{ r.memberCount }}人</template>
+          <template v-else>{{ r.weekHours }}h · {{ r.memberCount }}人</template>
+        </span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { departmentsApi } from '../api';
@@ -85,6 +106,25 @@ const loading = ref(false);
 const ov = ref<any>(null);
 const taskLimit = 3;
 const expanded = reactive(new Set<string>());
+/** 催办中的成员 id（按钮 loading） */
+const reminding = ref('');
+
+/** 周初兜底：dayIdx 0=周一 且本周尚无工时时，工时展示切到上周数据 */
+const isWeekStart = computed(() => ov.value?.dayIdx === 0);
+
+/** 催一下：钉钉私聊提醒该成员尽快提交今日日报（失败不阻断） */
+async function remindDaily(m: any) {
+  reminding.value = m.id;
+  try {
+    const r = await departmentsApi.remindDaily(m.id);
+    if (r?.sent) ElMessage.success(`已提醒 ${m.name}（钉钉私聊）`);
+    else ElMessage.warning(r?.error ? `提醒未发出：${r.error}` : `已记录提醒，但 ${m.name} 暂无法通过钉钉触达`);
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '催办失败');
+  } finally {
+    reminding.value = '';
+  }
+}
 
 const ST_CN: Record<string, string> = { TODO: '待办', IN_PROGRESS: '进行', DONE: '完成' };
 function stCn(s: string) { return ST_CN[s] ?? s; }
@@ -151,7 +191,7 @@ onMounted(load);
 .dept-sum b.c-over { color: var(--el-color-danger); font-weight: 500; }
 .dept-rate { margin-left: auto; font-size: 12px; color: var(--el-text-color-tertiary); }
 .mto-body { border-top: 1px solid var(--el-border-color-lighter); }
-.mto-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 170px 76px; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.mto-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 150px 168px; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px dashed var(--el-border-color-lighter); }
 .mto-row:last-child { border-bottom: none; }
 .mto-row.row-over { background: var(--el-color-danger-light-9); }
 .mto-user { display: flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -183,6 +223,9 @@ onMounted(load);
 .fill-over { background: var(--el-color-danger); }
 .bar-txt { font-size: 11px; color: var(--el-text-color-secondary); }
 .mto-hours { font-size: 12px; color: var(--el-text-color-secondary); text-align: right; font-variant-numeric: tabular-nums; }
+.mto-hours-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.mto-hours-cell .daily-tag { flex-shrink: 0; }
+.c-muted { color: var(--el-text-color-tertiary); }
 .mto-rank { border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 12px 14px; }
 .rank-title { font-size: 13px; font-weight: 500; color: var(--el-text-color-primary); display: block; margin-bottom: 8px; }
 .rank-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }

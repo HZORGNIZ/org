@@ -10,6 +10,7 @@ import { deptAuthorityIds, isDeptAuthority, ledDeptWhere, deptRosterWhere, pickD
 import { dailyExcerpt } from '../../common/daily-body';
 import { CN_OFFSET_MS, fmtBeijingDate } from '../../common/beijing-time';
 import { slotRangeLabel, slotsHours } from '../../common/work-slots';
+import { DingtalkDmService } from '../integrations/dingtalk-dm.service';
 
 /** 日报频率合法值（feature 3） */
 const REPORT_FREQS = ['NONE', 'DAILY', 'WORKDAY', 'WEEKLY_COUNT'];
@@ -20,7 +21,10 @@ export const DEFAULT_POSITIONS = ['产品经理', '工程师', '运维'];
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private dm: DingtalkDmService,
+  ) {}
 
   /** 部门列表（含负责人/共管人与项目/成员/文档数），按 sortOrder 再按创建时间 */
   async list() {
@@ -124,14 +128,27 @@ export class DepartmentsService {
 
   /**
    * 批量聚合一批成员的工作数据（任务/本周工时/本月 PBC），总览与部门看板共用。
-   * 返回 map[userId]：{ tasks（未完成在前、逾期最前）, doneCount, openCount, overdueCount, weekHours, pbcStatus }
+   * 返回 map[userId]：{ tasks（未完成在前、逾期最前）, doneCount, openCount, overdueCount, weekHours, prevWeekHours, dailySubmitted, pbcStatus }
    */
   private async workRowsOf(userIds: string[]) {
-    const empty = () => ({ tasks: [] as any[], doneCount: 0, openCount: 0, overdueCount: 0, weekHours: 0, pbcStatus: null as string | null });
+    const empty = () => ({
+      tasks: [] as any[],
+      doneCount: 0,
+      openCount: 0,
+      overdueCount: 0,
+      weekHours: 0,
+      prevWeekHours: 0,
+      dailySubmitted: false,
+      pbcStatus: null as string | null,
+    });
     const rows = new Map(userIds.map((id) => [id, empty()]));
     if (!userIds.length) return rows;
 
-    const [tasks, hoursByUser, pbcs] = await Promise.all([
+    const monday = this.mondayLocal();
+    const lastMonday = new Date(monday);
+    lastMonday.setDate(monday.getDate() - 7);
+
+    const [tasks, hoursByUser, prevHoursByUser, todayReports, pbcs] = await Promise.all([
       this.prisma.task.findMany({
         where: { assigneeId: { in: userIds } },
         select: {
@@ -143,8 +160,19 @@ export class DepartmentsService {
       }),
       this.prisma.report.groupBy({
         by: ['ownerId'],
-        where: { type: 'DAILY', ownerId: { in: userIds }, periodStart: { gte: this.mondayLocal() } },
+        where: { type: 'DAILY', ownerId: { in: userIds }, periodStart: { gte: monday } },
         _sum: { hours: true },
+      }),
+      // 上周工时：周一看板「全零」时兜底展示，避免误判功能坏了
+      this.prisma.report.groupBy({
+        by: ['ownerId'],
+        where: { type: 'DAILY', ownerId: { in: userIds }, periodStart: { gte: lastMonday, lt: monday } },
+        _sum: { hours: true },
+      }),
+      // 今日日报是否已提交（催办用）
+      this.prisma.report.findMany({
+        where: { type: 'DAILY', ownerId: { in: userIds }, periodStart: this.todayStart() },
+        select: { ownerId: true },
       }),
       this.prisma.pbc.findMany({
         where: { ownerId: { in: userIds }, month: this.currentMonth() },
@@ -179,6 +207,15 @@ export class DepartmentsService {
       const row = rows.get(h.ownerId);
       if (row) row.weekHours = Math.round((h._sum.hours ?? 0) * 10) / 10;
     }
+    for (const h of prevHoursByUser) {
+      if (!h.ownerId) continue;
+      const row = rows.get(h.ownerId);
+      if (row) row.prevWeekHours = Math.round((h._sum.hours ?? 0) * 10) / 10;
+    }
+    for (const r of todayReports) {
+      const row = rows.get(r.ownerId);
+      if (row) row.dailySubmitted = true;
+    }
     for (const p of pbcs) {
       const row = rows.get(p.ownerId);
       if (row) row.pbcStatus = p.status;
@@ -201,6 +238,7 @@ export class DepartmentsService {
       open: withRows.reduce((s, m) => s + m.openCount, 0),
       overdue: withRows.reduce((s, m) => s + m.overdueCount, 0),
       weekHours: Math.round(withRows.reduce((s, m) => s + m.weekHours, 0) * 10) / 10,
+      prevWeekHours: Math.round(withRows.reduce((s, m) => s + (m.prevWeekHours ?? 0), 0) * 10) / 10,
     };
     stats.total = stats.done + stats.open;
     return {
@@ -234,13 +272,47 @@ export class DepartmentsService {
         open: acc.open + e.stats.open,
         overdue: acc.overdue + e.stats.overdue,
         weekHours: Math.round((acc.weekHours + e.stats.weekHours) * 10) / 10,
+        prevWeekHours: Math.round((acc.prevWeekHours + e.stats.prevWeekHours) * 10) / 10,
       }),
-      { members: 0, open: 0, overdue: 0, weekHours: 0 },
+      { members: 0, open: 0, overdue: 0, weekHours: 0, prevWeekHours: 0 },
     );
     const ranking = entries
-      .map((e) => ({ id: e.id, name: e.name, weekHours: e.stats.weekHours, memberCount: e.memberCount }))
+      .map((e) => ({ id: e.id, name: e.name, weekHours: e.stats.weekHours, prevWeekHours: e.stats.prevWeekHours, memberCount: e.memberCount }))
       .sort((a, b) => b.weekHours - a.weekHours);
-    return { depts: entries, totals, ranking, month: this.currentMonth() };
+    // dayIdx 0=周一：周初看板「全零」时前端用 prevWeekHours 兜底标注
+    const dayIdx = (new Date().getDay() + 6) % 7;
+    return { depts: entries, totals, ranking, month: this.currentMonth(), dayIdx };
+  }
+
+  /**
+   * 催一下：钉钉私聊提醒成员尽快提交今日日报（管理员/其部门负责人·共管人可用）。
+   * 失败不抛错（钉钉可能未绑定），返回 sent/error 由前端提示。
+   */
+  async remindDaily(me: { id: string; role: string; name: string }, userId: string) {
+    const u = await this.prisma.user.findUnique({
+      where: { id: String(userId ?? '') },
+      select: { id: true, name: true, phone: true, departmentId: true },
+    });
+    if (!u) throw new NotFoundException('成员不存在');
+    if (me.role !== Role.ADMIN) {
+      // 非管理员：须是该成员主部门或额外部门的负责人/共管人
+      const managed = await this.prisma.department.findMany({ where: ledDeptWhere(me.id), select: { id: true } });
+      const managedIds = managed.map((d) => d.id);
+      const belongs = managedIds.length
+        ? await this.prisma.user.count({
+            where: { id: u.id, OR: [{ departmentId: { in: managedIds } }, { extraDepartments: { some: { id: { in: managedIds } } } }] },
+          })
+        : 0;
+      if (!belongs) throw new ForbiddenException('仅可催办自己部门的成员');
+    }
+    const text = [
+      `⏰ ${me.name} 提醒你：今天的日报还没提交。`,
+      '登录 MyOrgniz →「工作管理」→ 日报，填写今日工作内容与工时后提交。',
+      '',
+      '—— 来自 MyOrgniz 团队协作系统',
+    ].join('\n');
+    const r = await this.dm.notifyUser({ id: u.id, name: u.name, phone: u.phone }, text);
+    return { sent: r.sent, to: r.to, via: r.via, error: r.error ?? null };
   }
 
   /**
@@ -264,15 +336,32 @@ export class DepartmentsService {
     const ranking = await Promise.all(
       allDepts.map(async (d) => {
         const roster = await this.prisma.user.findMany({ where: deptRosterWhere(d.id), select: { id: true } });
-        const hours = await this.prisma.report.aggregate({
-          where: { type: 'DAILY', ownerId: { in: roster.map((u) => u.id) }, periodStart: { gte: this.mondayLocal() } },
-          _sum: { hours: true },
-        });
-        return { id: d.id, name: d.name, memberCount: roster.length, weekHours: Math.round((hours._sum.hours ?? 0) * 10) / 10 };
+        const ids = roster.map((u) => u.id);
+        const monday = this.mondayLocal();
+        const lastMonday = new Date(monday);
+        lastMonday.setDate(monday.getDate() - 7);
+        const [hours, prevHours] = await Promise.all([
+          this.prisma.report.aggregate({
+            where: { type: 'DAILY', ownerId: { in: ids }, periodStart: { gte: monday } },
+            _sum: { hours: true },
+          }),
+          this.prisma.report.aggregate({
+            where: { type: 'DAILY', ownerId: { in: ids }, periodStart: { gte: lastMonday, lt: monday } },
+            _sum: { hours: true },
+          }),
+        ]);
+        return {
+          id: d.id,
+          name: d.name,
+          memberCount: roster.length,
+          weekHours: Math.round((hours._sum.hours ?? 0) * 10) / 10,
+          prevWeekHours: Math.round((prevHours._sum.hours ?? 0) * 10) / 10,
+        };
       }),
     );
     ranking.sort((a, b) => b.weekHours - a.weekHours);
-    return { dept: { id: entry.id, name: entry.name }, stats: entry.stats, completionRate: entry.completionRate, members: entry.members, ranking, month: this.currentMonth() };
+    const dayIdx = (new Date().getDay() + 6) % 7;
+    return { dept: { id: entry.id, name: entry.name }, stats: entry.stats, completionRate: entry.completionRate, members: entry.members, ranking, month: this.currentMonth(), dayIdx };
   }
 
   /**

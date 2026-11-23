@@ -17,7 +17,8 @@
         </div>
         <div class="dwb-stat">
           <span class="lbl">本周工时</span>
-          <b>{{ stats?.weekHours ?? 0 }}h</b>
+          <b v-if="isWeekStart && !stats?.weekHours && (stats?.prevWeekHours ?? 0) > 0" class="c-muted">上周 {{ stats?.prevWeekHours }}h</b>
+          <b v-else>{{ stats?.weekHours ?? 0 }}h</b>
         </div>
       </div>
       <el-radio-group v-model="view" size="small">
@@ -35,7 +36,10 @@
           <div v-for="m in members" :key="m.id" class="mem-row" @click="$router.push('/members/' + m.id)">
             <span class="mem-name">{{ m.name }}</span>
             <div class="mem-bar"><i :class="fillCls(m)" :style="{ width: rateOf(m) + '%' }"></i></div>
-            <span class="mem-txt" :class="{ 'c-over': m.overdueCount > 0 }">完成 {{ m.doneCount }}/{{ m.doneCount + m.openCount }}<template v-if="m.overdueCount"> · {{ m.overdueCount }} 逾期</template> · {{ m.weekHours }}h</span>
+            <span class="mem-txt" :class="{ 'c-over': m.overdueCount > 0 }">
+              完成 {{ m.doneCount }}/{{ m.doneCount + m.openCount }}<template v-if="m.overdueCount"> · {{ m.overdueCount }} 逾期</template>
+              · <template v-if="m.weekHours > 0">{{ m.weekHours }}h</template><template v-else-if="m.prevWeekHours > 0">上周 {{ m.prevWeekHours }}h</template><template v-else>0h</template>
+            </span>
             <el-tag size="small" :type="pbcTagType(m.pbcStatus)" effect="light" class="mem-pbc">{{ pbcCn(m.pbcStatus) }}</el-tag>
           </div>
           <div v-if="!members.length" class="muted" style="padding: 10px 0;">该部门暂无在职成员</div>
@@ -47,7 +51,10 @@
           <div v-for="r in ranking" :key="r.id" class="rank-row" :class="{ 'rank-cur': r.id === deptId }">
             <span class="rank-name">{{ r.name }}</span>
             <div class="rank-bar"><i :style="{ width: rankW(r) + '%' }"></i></div>
-            <span class="rank-num">{{ r.weekHours }}h · {{ r.memberCount }}人</span>
+            <span class="rank-num">
+              <template v-if="isWeekStart && !r.weekHours && r.prevWeekHours > 0">上周 {{ r.prevWeekHours }}h · {{ r.memberCount }}人</template>
+              <template v-else>{{ r.weekHours }}h · {{ r.memberCount }}人</template>
+            </span>
           </div>
           <div class="rank-tip">口径：成员日报工时按主部门归集，本周一起算</div>
         </div>
@@ -101,6 +108,8 @@ const memberCount = computed(() => members.value.length);
 const completionRate = computed(() => board.value?.completionRate ?? 0);
 const pbcApproved = computed(() => members.value.filter((m: any) => m.pbcStatus === 'APPROVED').length);
 const viewCn = computed(() => ({ person: '按人', status: '按状态', project: '按项目' }[view.value]));
+/** 周初兜底：周一且本周尚无工时时展示上周数据 */
+const isWeekStart = computed(() => board.value?.dayIdx === 0);
 
 /** 全部门任务池（按人聚合行展开），三视角共用 */
 const allTasks = computed(() =>
@@ -155,8 +164,12 @@ function pbcTagType(s: string | null) {
   return s === 'APPROVED' ? 'success' : s === 'SUBMITTED' ? 'warning' : s === 'REJECTED' ? 'danger' : 'info';
 }
 function rankW(r: any) {
-  const max = Math.max(1, ...ranking.value.map((x: any) => x.weekHours || 0));
-  return Math.max(4, Math.round(((r.weekHours || 0) / max) * 100));
+  const max = Math.max(1, ...ranking.value.map((x: any) => dispH(x) || 0));
+  return Math.max(4, Math.round(((dispH(r) || 0) / max) * 100));
+}
+/** 排行条用的展示工时：周初本周无数据时以上周兜底 */
+function dispH(r: any) {
+  return r.weekHours || (isWeekStart.value ? r.prevWeekHours || 0 : 0);
 }
 
 async function load() {
@@ -227,4 +240,5 @@ onMounted(load);
 .col-more { font-size: 12px; color: var(--el-text-color-tertiary); padding: 2px 0; }
 .col-empty { font-size: 12px; color: var(--el-text-color-tertiary); }
 .c-over { color: var(--el-color-danger); }
+.c-muted { color: var(--el-text-color-tertiary); }
 </style>

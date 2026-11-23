@@ -2009,7 +2009,15 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       const covered = events.some((ev) => ev.kind === 'FREE' && ev.startMin <= r.startMin && ev.endMin >= r.endMin);
       return { startMin: r.startMin, endMin: r.endMin, time: slotRangeLabel(r.startMin, r.endMin), openForBooking: covered };
     });
-    return { date: fmtBeijingDate(day), weekday: weekdayLabel(dow), dow, items, free: freeItems };
+    // scheduleBasis：可约时段的基准来源——custom=本人排班；default=未设排班时工作日 9:00-18:00 兜底（前端据此提示）
+    return {
+      date: fmtBeijingDate(day),
+      weekday: weekdayLabel(dow),
+      dow,
+      items,
+      free: freeItems,
+      scheduleBasis: workSlots.length ? 'custom' : 'default',
+    };
   }
 
   /** 我某天的完整时间轴（工作台「我的日程」tab 与 myday 机器人共用） */

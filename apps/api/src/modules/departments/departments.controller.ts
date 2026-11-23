@@ -72,6 +72,12 @@ export class DepartmentsController {
     return this.departments.taskOverview({ id: user.id, role: user.role });
   }
 
+  /** 催一下：钉钉私聊提醒成员尽快提交今日日报（管理员看全部；负责人/共管人限本部门成员） */
+  @Post('remind-daily')
+  remindDaily(@CurrentUser() user: CurrentUserPayload, @Body() body: { userId?: string }) {
+    return this.departments.remindDaily({ id: user.id, role: user.role, name: user.name }, String(body?.userId ?? ''));
+  }
+
   /** 部门工作看板：单部门成员完成度/PBC/任务数据源 + 全公司部门工时排行（管理者任意部门；成员限本部门） */
   @Get(':id/board')
   deptBoard(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {

@@ -19,6 +19,11 @@
         >{{ f.label }} {{ f.n }}</button>
         <el-button type="primary" size="small" @click="openAdd()">＋ 添加安排</el-button>
       </div>
+      <!-- 未设置排班：可约时段按默认 9:00-18:00 计算，提示去设置 -->
+      <div v-if="tl?.scheduleBasis === 'default'" class="myday-sched-tip">
+        你还没有设置工作排班，「可约时段」按默认 <b>工作日 9:00-18:00</b> 计算。
+        打开智能体里的「我的日程」小助理，说「设置排班」即可自定义。
+      </div>
     </div>
 
     <!-- 主视图：一天的时间轴（四类条目分层，按开始时间排序） -->
@@ -296,6 +301,7 @@ defineExpose({ reload: load });
 .myday-nav { display: flex; align-items: center; gap: 8px; }
 .myday-weekday { color: var(--el-text-color-secondary); font-size: 13px; margin-left: 4px; }
 .myday-stats { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.myday-sched-tip { width: 100%; margin-top: 8px; font-size: 12px; color: var(--el-color-warning-dark-2); background: var(--el-color-warning-light-9); border-radius: 6px; padding: 6px 10px; line-height: 1.6; }
 .stat-chip { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); border: 1px solid transparent; cursor: pointer; }
 .stat-chip.active { border-color: var(--el-color-primary); color: var(--el-color-primary); font-weight: 500; }
 .stat-chip.c-meeting { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }

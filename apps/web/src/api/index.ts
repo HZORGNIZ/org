@@ -69,6 +69,8 @@ export const departmentsApi = {
   taskOverview: () => api.get<any>('/departments/task-overview'),
   /** 部门工作看板：成员完成度/PBC/任务数据源 + 部门工时排行 */
   deptBoard: (id: string) => api.get<any>(`/departments/${id}/board`),
+  /** 催一下：钉钉私聊提醒成员尽快提交今日日报（管理员/部门负责人·共管人） */
+  remindDaily: (userId: string) => api.post<any>('/departments/remind-daily', { userId }),
   /** 设置某人直属上级；parentId 传 null 置为根 */
   setReportsTo: (userId: string, parentId: string | null) =>
     api.put<any>('/departments/report-to', { userId, parentId }),
