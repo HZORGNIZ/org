@@ -59,7 +59,7 @@
         </div>
       </div>
       <div class="month-stats">
-        <span v-for="(v, k) in monthData?.stats ?? {}" :key="k" class="month-stat"><i class="lg" :class="statDot(k)"></i>{{ statLabel(k) }} {{ v }}</span>
+        <span v-for="(v, k) in monthData?.stats ?? {}" :key="k" class="month-stat"><i class="lg" :class="statDot(String(k))"></i>{{ statLabel(String(k)) }} {{ v }}</span>
         <span class="muted month-stat-tip">点任意日期查看当天完整安排；点「单日」回到时间轴视图</span>
       </div>
     </div>

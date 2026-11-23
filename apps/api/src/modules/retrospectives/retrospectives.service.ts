@@ -548,9 +548,22 @@ export class RetrospectivesService {
       }),
       this.prisma.projectDepartment.findMany({
         where: { departmentId: retro.departmentId },
-        include: { project: { select: { name: true, progress: true, archived: true } } },
+        include: { project: { select: { name: true, status: true, archived: true } } },
       }),
     ]);
+
+    // 项目进度按任务完成率实时计算（Project 模型无 progress 字段）
+    const projIds = projects.map((p) => p.project.id);
+    const projTasks = projIds.length
+      ? await this.prisma.task.findMany({ where: { projectId: { in: projIds } }, select: { projectId: true, status: true } })
+      : [];
+    const projTaskStats = new Map<string, { total: number; done: number }>();
+    for (const t of projTasks) {
+      const s = projTaskStats.get(t.projectId) ?? { total: 0, done: 0 };
+      s.total += 1;
+      if (t.status === 'DONE') s.done += 1;
+      projTaskStats.set(t.projectId, s);
+    }
 
     const nameById = new Map(members.map((m) => [m.id, m.name]));
     const taskStats = new Map<string, { total: number; done: number; overdue: number }>();
@@ -593,7 +606,11 @@ export class RetrospectivesService {
 
     const projectLines = projects
       .filter((p) => !p.project.archived)
-      .map((p) => `- ${p.project.name}：进度 ${p.project.progress ?? 0}%`);
+      .map((p) => {
+        const ts = projTaskStats.get(p.project.id) ?? { total: 0, done: 0 };
+        const pct = ts.total ? Math.round((ts.done / ts.total) * 100) : 0;
+        return `- ${p.project.name}：任务完成率 ${pct}%（${ts.done}/${ts.total}）`;
+      });
     const deptStats = {
       members: members.length,
       tasksTotal: tasks.length,
