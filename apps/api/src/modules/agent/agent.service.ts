@@ -1591,6 +1591,72 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     return cur;
   }
 
+  /**
+   * 单日可约口径（共享方法，三处同源）：
+   * 开放基准 = 周排班(UserWorkSlot) ∪ 临时开放(UserTimeSlot FREE) ∪ 日程开放(PersonalEvent FREE)
+   * 占用 = 会议 + 预约(待确认/已确认) + 日程安排/外出/占用(EVENT/OUTING/BUSY) + 临时不可约(UserTimeSlot BUSY)
+   * 消费方：computeAvailability(约时间机器人/7天卡)、buildDayTimeline(我的日程·日历+周历)、insideOwnerFree(预约确认卡校验)
+   */
+  private dayOpenRanges(
+    input: {
+      weekly: { weekday: number; startMin: number; endMin: number }[];
+      oneoffs: { date: Date; startMin: number; endMin: number; kind: string; note?: string | null }[];
+      events: { date: Date; startMin: number; endMin: number; kind: string; title: string; note?: string | null }[];
+      meetings: { startAt: Date; endAt: Date; title: string; status: string }[];
+      bookings: { startAt: Date; endAt: Date; status: string; requester?: { name?: string | null } | null }[];
+    },
+    day: Date,
+  ) {
+    const dayStart = day.getTime();
+    const dayEnd = this.addDays(day, 1).getTime();
+    const dow = this.bjWeekdayOf(day);
+    const dayOffs = input.oneoffs.filter((o) => o.date.getTime() === dayStart);
+    const dayEvents = input.events.filter((e) => e.date.getTime() === dayStart);
+    // 开放可约基准 = 周排班 + 临时可约(UserTimeSlot FREE) + 日程里点「开放可约」的时段(PersonalEvent FREE)
+    // 只认老师登记的排班/开放时段：没登记的天一律不可约（绝不把老师没开放的时间当成空闲）
+    const base = [
+      ...input.weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
+      ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
+      ...dayEvents.filter((e) => e.kind === 'FREE').map((e) => ({ startMin: e.startMin, endMin: e.endMin })),
+    ];
+    const blocks: { startMin: number; endMin: number }[] = dayOffs
+      .filter((o) => o.kind === 'BUSY')
+      .map((o) => ({ startMin: o.startMin, endMin: o.endMin }));
+    const busy: { time: string; label: string }[] = [];
+    // 日程里的日程安排/外出/占用一律视为已占用（老师自己写的安排当然不能被约）
+    for (const e of dayEvents.filter((x) => x.kind !== 'FREE')) {
+      blocks.push({ startMin: e.startMin, endMin: e.endMin });
+      const label = e.kind === 'BUSY' ? (e.note ? `不可约：${e.note}` : '不可约') : e.kind === 'OUTING' ? `外出：${e.title}` : `日程：${e.title}`;
+      busy.push({ time: slotRangeLabel(e.startMin, e.endMin), label });
+    }
+    const clampRange = (s: Date, e: Date) => {
+      const sMin = Math.max(0, Math.round((Math.max(s.getTime(), dayStart) - dayStart) / 60000));
+      const eMin = Math.min(1440, Math.round((Math.min(e.getTime(), dayEnd) - dayStart) / 60000));
+      return { startMin: sMin, endMin: eMin };
+    };
+    for (const m of input.meetings) {
+      if (m.endAt.getTime() <= dayStart || m.startAt.getTime() >= dayEnd) continue;
+      const r = clampRange(m.startAt, m.endAt);
+      blocks.push(r);
+      busy.push({ time: slotRangeLabel(r.startMin, r.endMin), label: `会议《${m.title}》` });
+    }
+    for (const b of input.bookings) {
+      if (b.endAt.getTime() <= dayStart || b.startAt.getTime() >= dayEnd) continue;
+      const r = clampRange(b.startAt, b.endAt);
+      blocks.push(r);
+      busy.push({
+        time: slotRangeLabel(r.startMin, r.endMin),
+        label: `${b.status === 'CONFIRMED' ? '已确认预约' : '待确认预约'}·${b.requester?.name ?? '成员'}`,
+      });
+    }
+    for (const o of dayOffs.filter((x) => x.kind === 'BUSY')) {
+      busy.push({ time: slotRangeLabel(o.startMin, o.endMin), label: o.note ? `不可约：${o.note}` : '不可约' });
+    }
+    const freeRanges = base.length ? this.subtractMinutes(base, blocks) : [];
+    const note = !base.length ? '老师未登记可约时间' : !freeRanges.length ? '当天已排满' : undefined;
+    return { freeRanges, busy: busy.sort((a, b) => a.time.localeCompare(b.time)), note };
+  }
+
   /** 老师某几天的空档：工作时段模板 + 临时可约/不可约 + 会议 + 预约（待确认也占位，避免撞车） */
   private async computeAvailability(ownerId: string, fromDay: Date, toDay: Date) {
     const rangeEnd = this.addDays(toDay, 1);
@@ -1631,62 +1697,15 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     }[] = [];
 
     for (let cur = fromDay; cur.getTime() <= toDay.getTime(); cur = this.addDays(cur, 1)) {
-      const dayStart = cur.getTime();
-      const dayEnd = this.addDays(cur, 1).getTime();
-      const dow = this.bjWeekdayOf(cur);
-      const dayOffs = oneoffs.filter((o) => o.date.getTime() === dayStart);
-      const dayEvents = events.filter((e) => e.date.getTime() === dayStart);
-      // 开放可约基准 = 周排班 + 临时可约(UserTimeSlot FREE) + 日程里点「开放可约」的时段(PersonalEvent FREE)
-      const base = [
-        ...weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
-        ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
-        ...dayEvents.filter((e) => e.kind === 'FREE').map((e) => ({ startMin: e.startMin, endMin: e.endMin })),
-      ];
-      // 只认老师登记的排班/开放时段：没登记的天一律不可约（绝不把老师没开放的时间当成空闲）
-      const baseRanges = base;
-      const blocks: { startMin: number; endMin: number }[] = dayOffs
-        .filter((o) => o.kind === 'BUSY')
-        .map((o) => ({ startMin: o.startMin, endMin: o.endMin }));
-      const busy: { time: string; label: string }[] = [];
-      // 日程里的日程安排/外出/占用一律视为已占用（老师自己写的安排当然不能被约）
-      for (const e of dayEvents.filter((x) => x.kind !== 'FREE')) {
-        blocks.push({ startMin: e.startMin, endMin: e.endMin });
-        const label = e.kind === 'BUSY' ? (e.note ? `不可约：${e.note}` : '不可约') : e.kind === 'OUTING' ? `外出：${e.title}` : `日程：${e.title}`;
-        busy.push({ time: slotRangeLabel(e.startMin, e.endMin), label });
-      }
-      const clampRange = (s: Date, e: Date) => {
-        const sMin = Math.max(0, Math.round((Math.max(s.getTime(), dayStart) - dayStart) / 60000));
-        const eMin = Math.min(1440, Math.round((Math.min(e.getTime(), dayEnd) - dayStart) / 60000));
-        return { startMin: sMin, endMin: eMin };
-      };
-      for (const m of meetings) {
-        if (m.endAt.getTime() <= dayStart || m.startAt.getTime() >= dayEnd) continue;
-        const r = clampRange(m.startAt, m.endAt);
-        blocks.push(r);
-        busy.push({ time: slotRangeLabel(r.startMin, r.endMin), label: `会议《${m.title}》` });
-      }
-      for (const b of bookings) {
-        if (b.endAt.getTime() <= dayStart || b.startAt.getTime() >= dayEnd) continue;
-        const r = clampRange(b.startAt, b.endAt);
-        blocks.push(r);
-        busy.push({
-          time: slotRangeLabel(r.startMin, r.endMin),
-          label: `${b.status === 'CONFIRMED' ? '已确认预约' : '待确认预约'}·${b.requester?.name ?? '成员'}`,
-        });
-      }
-      for (const o of dayOffs.filter((x) => x.kind === 'BUSY')) {
-        busy.push({ time: slotRangeLabel(o.startMin, o.endMin), label: o.note ? `不可约：${o.note}` : '不可约' });
-      }
-      const freeRanges = baseRanges.length ? this.subtractMinutes(baseRanges, blocks) : [];
+      const r = this.dayOpenRanges({ weekly, oneoffs, events, meetings, bookings }, cur);
       const row: (typeof days)[number] = {
         date: fmtBeijingDate(cur),
-        weekday: weekdayLabel(dow),
-        free: freeRanges.map((r) => slotRangeLabel(r.startMin, r.endMin)),
-        freeRanges,
-        busy: busy.sort((a, b) => a.time.localeCompare(b.time)),
+        weekday: weekdayLabel(this.bjWeekdayOf(cur)),
+        free: r.freeRanges.map((x) => slotRangeLabel(x.startMin, x.endMin)),
+        freeRanges: r.freeRanges,
+        busy: r.busy,
       };
-      if (!base.length) row.note = '老师未登记可约时间';
-      else if (!freeRanges.length) row.note = '当天已排满';
+      if (r.note) row.note = r.note;
       days.push(row);
     }
     return { days };
@@ -1844,8 +1863,12 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       const clamped = Math.min(Math.max(t.getTime(), day.getTime()), dayEnd.getTime());
       return Math.round((clamped - day.getTime()) / 60000);
     };
-    const [workSlots, meetings, bookings, events] = await Promise.all([
+    const [workSlots, oneoffs, meetings, bookings, events] = await Promise.all([
       this.prisma.userWorkSlot.findMany({ where: { userId, weekday: dow }, orderBy: { startMin: 'asc' } }),
+      this.prisma.userTimeSlot.findMany({
+        where: { userId, date: day },
+        select: { date: true, startMin: true, endMin: true, kind: true, note: true },
+      }),
       this.prisma.meeting.findMany({
         where: {
           deletedAt: null,
@@ -1939,31 +1962,33 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       });
     }
     items.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
-    // 空余计算：基准=上班排班（没有则工作日 09:00-18:00 兜底）；busy=会议+已确认预约+EVENT/BUSY 个人事项
-    const baseRanges: { startMin: number; endMin: number }[] = workSlots.length
-      ? workSlots.map((w) => ({ startMin: w.startMin, endMin: w.endMin }))
-      : dow <= 4
-        ? [{ startMin: 9 * 60, endMin: 18 * 60 }]
-        : [];
-    const busyRanges: { startMin: number; endMin: number }[] = [];
-    for (const it of items) {
-      if (it.type === 'MEETING' || it.type === 'BOOKING' || (it.type === 'EVENT' && it.kind !== 'FREE')) {
-        if (it.endMin > it.startMin) busyRanges.push({ startMin: it.startMin, endMin: it.endMin });
-      }
-    }
-    const free = this.subtractMinutes(baseRanges, busyRanges);
-    const freeItems = free.map((r) => {
-      const covered = events.some((ev) => ev.kind === 'FREE' && ev.startMin <= r.startMin && ev.endMin >= r.endMin);
-      return { startMin: r.startMin, endMin: r.endMin, time: slotRangeLabel(r.startMin, r.endMin), openForBooking: covered };
-    });
-    // scheduleBasis：可约时段的基准来源——custom=本人排班；default=未设排班时工作日 9:00-18:00 兜底（前端据此提示）
+    // 空余/可约口径与约时间机器人完全同源（dayOpenRanges 共享方法）：基准=周排班∪临时开放∪日程FREE；占用=会议+预约+日程安排/外出/占用
+    // 与 computeAvailability 保持一致：不再做 9:00-18:00 兜底，没登记排班/开放时段就没有空余（前端据此给登记引导）
+    const r = this.dayOpenRanges(
+      {
+        weekly: workSlots.map((w) => ({ weekday: w.weekday, startMin: w.startMin, endMin: w.endMin })),
+        oneoffs,
+        events: events.map((e) => ({ date: e.date, startMin: e.startMin, endMin: e.endMin, kind: e.kind, title: e.title, note: e.note })),
+        meetings: meetings.map((m) => ({ startAt: m.startAt, endAt: m.endAt, title: m.title, status: m.status })),
+        bookings: bookings.map((b) => ({ startAt: b.startAt, endAt: b.endAt, status: b.status, requester: { name: b.requester?.name ?? null } })),
+      },
+      day,
+    );
+    // 与 dayOpenRanges 同口径算出的 free 即可约时段（openForBooking 统一 true：free 就是成员能约的时段）
+    const freeItems = r.freeRanges.map((x) => ({
+      startMin: x.startMin,
+      endMin: x.endMin,
+      time: slotRangeLabel(x.startMin, x.endMin),
+      openForBooking: true,
+    }));
+    // scheduleBasis：可约时段的基准来源——custom=本人排班/登记；default=未登记（前端据此提示先登记可约时间）
     return {
       date: fmtBeijingDate(day),
       weekday: weekdayLabel(dow),
       dow,
       items,
       free: freeItems,
-      scheduleBasis: workSlots.length ? 'custom' : 'default',
+      scheduleBasis: workSlots.length || oneoffs.length || events.some((e) => e.kind === 'FREE') ? 'custom' : 'default',
     };
   }
 

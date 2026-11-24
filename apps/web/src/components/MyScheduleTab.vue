@@ -5,6 +5,7 @@
       <div class="myday-nav">
         <el-radio-group v-model="view" size="small" @change="onViewChange">
           <el-radio-button value="month">月历</el-radio-button>
+          <el-radio-button value="week">周历</el-radio-button>
           <el-radio-button value="day">单日</el-radio-button>
         </el-radio-group>
         <template v-if="view === 'month'">
@@ -12,6 +13,12 @@
           <b class="myday-month-label">{{ monthStr }}</b>
           <el-button size="small" @click="shiftMonth(1)">›</el-button>
           <el-button v-if="monthStr !== today.slice(0, 7)" size="small" text type="primary" @click="goThisMonth">回到本月</el-button>
+        </template>
+        <template v-else-if="view === 'week'">
+          <el-button size="small" @click="shiftWeek(-1)">‹</el-button>
+          <b class="myday-month-label">{{ weekLabel }}</b>
+          <el-button size="small" @click="shiftWeek(1)">›</el-button>
+          <el-button v-if="!weekIsCurrent" size="small" text type="primary" @click="goThisWeek">回到本周</el-button>
         </template>
         <template v-else>
           <el-button size="small" @click="shiftDay(-1)">前一天</el-button>
@@ -31,10 +38,10 @@
         >{{ f.label }} {{ f.n }}</button>
         <el-button type="primary" size="small" @click="openAdd()">＋ 添加安排</el-button>
       </div>
-      <!-- 未设置排班：可约时段按默认 9:00-18:00 计算，提示去设置 -->
+      <!-- 未登记可约时间：成员约不到，引导先登记 -->
       <div v-if="view === 'day' && tl?.scheduleBasis === 'default'" class="myday-sched-tip">
-        你还没有设置工作排班，「可约时段」按默认 <b>工作日 9:00-18:00</b> 计算。
-        打开智能体里的「我的日程」小助理，说「设置排班」即可自定义。
+        你还没有登记可约时间（周排班或「开放可约」时段），<b>成员约不到你</b>。
+        去周历里拖一段空余点「开放可约」，或打开智能体的「我的日程」小助理说「设置排班」。
       </div>
     </div>
 
@@ -49,7 +56,10 @@
           :class="{ out: !c.inMonth, today: c.key === today, has: c.day?.total }"
           @click="c.inMonth && goDay(c.key)"
         >
-          <div class="month-date" :class="{ sun: isSunday(c.key) }">{{ Number(c.key.slice(8)) }}</div>
+          <div class="month-date" :class="{ sun: isSunday(c.key) }">
+            {{ Number(c.key.slice(8)) }}
+            <button v-if="c.inMonth" class="mc-add" title="快捷添加安排" @click.stop="goDay(c.key)">＋</button>
+          </div>
           <template v-if="c.day">
             <div v-for="it in c.day.items.slice(0, 3)" :key="it.type + it.refId" class="month-chip" :class="'mc-' + it.type.toLowerCase()">
               <span v-if="it.time" class="mc-time">{{ it.time }}</span><span class="mc-title">{{ it.title }}</span>
@@ -104,6 +114,16 @@
             </div>
           </div>
         </div>
+        <!-- 拖拽选时段后快捷 chip：点一下即建（事项可不填），「详细…」展开完整填写卡 -->
+        <div v-if="dgChip.open" class="wk-chipbar dg-chipbar" :style="{ top: dgChip.top + 'px', left: dgChip.left + 'px' }" @pointerdown.stop @click.stop>
+          <span class="wk-chip-note">{{ minToHHmm(dgChip.a) }}–{{ minToHHmm(dgChip.b) }}</span>
+          <button class="wk-chip wc-free" @click="dgQuickCreate('FREE')">开放可约</button>
+          <button class="wk-chip wc-event" @click="dgQuickCreate('EVENT')">安排</button>
+          <button class="wk-chip wc-outing" @click="dgQuickCreate('OUTING')">外出</button>
+          <button class="wk-chip wc-busy" @click="dgQuickCreate('BUSY')">占用</button>
+          <button class="wk-chip wc-more" @click="dgOpenDetail">详细…</button>
+          <button class="wk-chip wc-x" @click="closeDgChip">✕</button>
+        </div>
         <!-- 就地填写卡（非弹窗遮罩）：拖拽选时段后出现在网格上 -->
         <div v-if="card.open" class="dg-card" :style="{ top: card.top + 'px', left: card.left + 'px' }" @pointerdown.stop @click.stop>
           <div class="dg-card-hd">
@@ -145,26 +165,69 @@
       </div>
     </div>
 
-    <!-- 周网格：未来 7 天空档一览（哪天空、哪天满），点「开放」直接上架可约 -->
-    <div class="page-card">
-      <div class="myday-week-hd">
-        <span class="myday-sec-title">未来 7 天空档一览</span>
-        <span class="muted">点空余时段的「开放」，同事就能在「约你」时段里约到这个时间</span>
+    <!-- 周历视图：本周一~周日 7 列 × 小时网格放大显示，四色块；拖空白格快捷添加（事项可不填），点色块编辑/取消开放 -->
+    <div class="page-card" v-if="view === 'week'" v-loading="weekLoading">
+      <div class="wk-head">
+        <span class="myday-sec-title">周历</span>
+        <span class="wk-lg"><i class="lg lg-free"></i>开放可约</span>
+        <span class="wk-lg"><i class="lg lg-event"></i>安排/会议/预约</span>
+        <span class="wk-lg"><i class="lg lg-outing"></i>外出/占用</span>
+        <span class="muted wk-tip">绿色时段 = 成员约你时看到的时间；在空白格<b>按住拖一拽</b>选时段，点一下即可添加（事项可不填）</span>
       </div>
-      <div class="myday-week" v-loading="weekLoading">
-        <div v-for="d in weekDays" :key="d.date" class="week-col" :class="{ today: d.date === today }">
-          <div class="week-date">{{ d.date.slice(5) }}<small>{{ d.weekday.slice(0, 3) }}</small></div>
-          <div v-if="d.free.length" class="week-free">
-            <div v-for="(f, fi) in d.free" :key="fi" class="week-slot">
-              <span>{{ f.time }}</span>
-              <el-button v-if="!f.openForBooking" size="small" text type="success" @click="quickOpen(d, f)">开放</el-button>
-              <el-tag v-else size="small" type="success" effect="light">可约</el-tag>
-            </div>
+      <div v-if="!weekLoading && wkAllEmpty" class="myday-empty">
+        本周还没有任何登记：在空白格拖一段时间，点「开放可约」，成员就能约你了。
+      </div>
+      <div class="wk-grid" v-loading="weekLoading">
+        <div class="wk-gutter">
+          <div class="wk-corner">时间</div>
+          <div v-for="h in wkHours" :key="h" class="wk-hour" :style="{ height: WK_PX + 'px' }">{{ String(h).padStart(2, '0') }}:00</div>
+        </div>
+        <div v-for="(d, di) in wkCols" :key="d.date" class="wk-col" :class="{ today: d.date === today }">
+          <div class="wk-day-hd">
+            <span class="wk-day-date">{{ Number(d.date.slice(8)) }}<small>{{ d.weekday?.slice(0, 3) ?? '' }}</small></span>
+            <span class="wk-day-free" :class="{ none: !d.freeHours }">可约 {{ d.freeHours || '0h' }}</span>
           </div>
-          <div v-else class="week-none">已排满</div>
-          <div class="week-busy">
-            <div v-for="(it, bi) in d.items.filter((x: any) => x.type !== 'WORK')" :key="bi" class="week-busy-item" :title="it.label">
-              {{ it.time }} {{ it.label }}
+          <div
+            class="wk-track"
+            :style="{ height: wkTrackHeight + 'px', backgroundSize: `100% ${WK_PX}px, 100% ${WK_PX / 2}px` }"
+            @pointerdown="onWkDown($event, di)"
+            @pointermove="onWkMove"
+            @pointerup="onWkUp"
+            @pointercancel="onWkCancel"
+            @click="onWkClick($event, di)"
+          >
+            <div v-if="wkNowTop !== null && d.date === today" class="dg-now" :style="{ top: wkNowTop + 'px' }"></div>
+            <div
+              v-for="b in d.blocks"
+              :key="b.key"
+              class="wk-block"
+              :class="'wb-' + b.cls"
+              :style="{ top: b.top + 'px', height: b.height + 'px' }"
+              :title="`${b.time} ${b.title}`"
+              @click.stop="onWkBlockClick(b, di)"
+            >
+              <span class="wb-time">{{ b.time }}</span>
+              <span class="wb-title">{{ b.title }}</span>
+            </div>
+            <div v-if="wkSel && wkSel.col === di" class="dg-sel" :style="{ top: wkSelTop + 'px', height: wkSelHeight + 'px' }">{{ wkSelText }}</div>
+            <!-- 拖拽选时段后的快捷操作条（事项可不填，点一下即建） -->
+            <div v-if="wkChip.open && wkChip.col === di" class="wk-chipbar" :style="{ top: wkChip.top + 'px' }" @pointerdown.stop @click.stop>
+              <template v-if="wkChip.mode === 'create'">
+                <button class="wk-chip wc-free" @click="wkQuickCreate('FREE')">开放可约</button>
+                <button class="wk-chip wc-event" @click="wkQuickCreate('EVENT')">安排</button>
+                <button class="wk-chip wc-outing" @click="wkQuickCreate('OUTING')">外出</button>
+                <button class="wk-chip wc-busy" @click="wkQuickCreate('BUSY')">占用</button>
+                <button class="wk-chip wc-more" @click="wkOpenDetail">详细…</button>
+              </template>
+              <template v-else-if="wkChip.mode === 'free'">
+                <button class="wk-chip wc-cancel-open" @click="wkCancelOpen">取消开放</button>
+                <span class="wk-chip-note">来自排班/开放时段</span>
+              </template>
+              <template v-else>
+                <button class="wk-chip wc-more" @click="wkEditEvent">编辑</button>
+                <button class="wk-chip wc-del" @click="wkDeleteEvent">删除</button>
+              </template>
+              <button class="wk-chip wc-x" @click="closeWkChip">✕</button>
             </div>
           </div>
         </div>
@@ -230,7 +293,7 @@ function rowKey(x: any) {
 }
 
 /** ---- 视图切换与月历 ---- */
-const view = ref<'month' | 'day'>('month');
+const view = ref<'month' | 'week' | 'day'>('month');
 const DOW = ['一', '二', '三', '四', '五', '六', '日'];
 const monthStr = ref(dayjs().format('YYYY-MM'));
 const monthData = ref<any>(null);
@@ -285,10 +348,8 @@ function goThisMonth() {
 }
 function onViewChange(v: any) {
   if (v === 'month') loadMonth();
-  else if (!tl.value || tl.value.date !== dateStr.value) {
-    load();
-    loadWeek();
-  }
+  else if (v === 'week') loadWeek();
+  else if (!tl.value || tl.value.date !== dateStr.value) load();
 }
 /** 月历格点击 → 切到该日时间网格；先用月历已有数据立即渲染（零等待），后台再拉权威数据无缝覆盖 */
 function goDay(key: string) {
@@ -361,9 +422,9 @@ async function load(silent = false) {
 async function loadWeek() {
   weekLoading.value = true;
   try {
-    weekDays.value = (await agentApi.week(dateStr.value)).days;
+    weekDays.value = (await agentApi.week(weekStart.value)).days;
   } catch {
-    /* 周网格失败不打扰主视图 */
+    /* 周历失败不打扰主视图 */
   } finally {
     weekLoading.value = false;
   }
@@ -378,6 +439,8 @@ async function refreshQuiet() {
     } catch {
       /* 静默刷新失败不打扰 */
     }
+  } else if (view.value === 'week') {
+    loadWeek();
   } else {
     loadMonth();
   }
@@ -519,6 +582,7 @@ function onTrackDown(e: PointerEvent) {
   if (onBlockHit(e.target)) return;
   if (e.pointerType !== 'mouse') return; // 触屏：点一下出卡（交给 click），不劫持滚动手势
   if (card.value.open) closeCard();
+  closeDgChip();
   const el = e.currentTarget as HTMLElement;
   const m = yToMin(e.clientY - el.getBoundingClientRect().top);
   dragging.value = true;
@@ -539,7 +603,8 @@ function onTrackUp() {
   dragging.value = false;
   suppressClick.value = true;
   setTimeout(() => (suppressClick.value = false), 60);
-  if (sel.value) openCard(sel.value.a, sel.value.b);
+  // 拖拽松手 → 快捷 chip（点一下即建）；需要精确改时间/写备注再点「详细…」
+  if (sel.value) openDgChip(sel.value.a, sel.value.b);
 }
 function onTrackCancel() {
   dragging.value = false;
@@ -683,17 +748,257 @@ async function removeEvent(it: any) {
   }
 }
 
-/** 周网格快捷开放：直接以 FREE 落库 */
-async function quickOpen(d: any, f: any) {
-  try {
-    const r = await agentApi.createEvent({ date: d.date, startMin: minToHHmm(f.startMin), endMin: minToHHmm(f.endMin), kind: 'FREE', title: '', source: 'manual' });
-    if (r?.warning) ElMessage.warning(r.warning);
-    else ElMessage.success(`${d.date.slice(5)} ${f.time} 已开放可约`);
-    load(true);
-    loadMonth();
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message ?? '开放失败');
+/** ---- 周历视图：本周一~周日 7 列 × 小时网格（7:00-22:00），可拖拽快捷设置 ---- */
+const WK_START = 7 * 60;
+const WK_END = 22 * 60;
+const WK_PX = 30;
+const wkTrackHeight = ((WK_END - WK_START) / 60) * WK_PX;
+const wkHours = computed(() => {
+  const o: number[] = [];
+  for (let h = WK_START / 60; h < WK_END / 60; h++) o.push(h);
+  return o;
+});
+function mondayOf(d: string) {
+  const dt = dayjs(d);
+  return dt.subtract((dt.day() + 6) % 7, 'day').format('YYYY-MM-DD');
+}
+const weekStart = ref(mondayOf(today));
+const weekIsCurrent = computed(() => weekStart.value === mondayOf(today));
+const weekLabel = computed(() => `${dayjs(weekStart.value).format('M/D')} – ${dayjs(weekStart.value).add(6, 'day').format('M/D')}`);
+function shiftWeek(n: number) {
+  weekStart.value = dayjs(weekStart.value).add(n * 7, 'day').format('YYYY-MM-DD');
+  loadWeek();
+}
+function goThisWeek() {
+  weekStart.value = mondayOf(today);
+  loadWeek();
+}
+const wkNowTop = computed(() => {
+  const n = dayjs().hour() * 60 + dayjs().minute();
+  if (n < WK_START || n > WK_END) return null;
+  return ((n - WK_START) / 60) * WK_PX;
+});
+/** 本周完全无登记（无排班/无安排/无开放时段）时给引导 */
+const wkAllEmpty = computed(() =>
+  (weekDays.value ?? []).every(
+    (d: any) => !(d.items ?? []).some((x: any) => x.type !== 'WORK' && typeof x.startMin === 'number') && !(d.free ?? []).length,
+  ),
+);
+/** 每列色块：蓝=安排/会议/预约，橙=外出/占用，绿=开放可约（与约时间机器人同口径） */
+const wkCols = computed(() =>
+  (weekDays.value ?? []).map((d: any) => {
+    const blocks: any[] = [];
+    const push = (key: string, a: number, b: number, cls: string, time: string, title: string, raw: any) => {
+      const top = Math.max(0, ((a - WK_START) / 60) * WK_PX);
+      const bottom = Math.min(wkTrackHeight, ((b - WK_START) / 60) * WK_PX);
+      if (bottom - top < 4) return;
+      blocks.push({ key, cls, top, height: bottom - top, time, title, raw, a: Math.max(WK_START, a), b: Math.min(WK_END, b) });
+    };
+    for (const it of d.items ?? []) {
+      if (typeof it.startMin !== 'number' || it.type === 'WORK') continue;
+      const end = typeof it.endMin === 'number' && it.endMin > it.startMin ? it.endMin : it.startMin + 30;
+      const cls = it.type === 'EVENT' ? (it.kind === 'FREE' ? 'free' : it.kind === 'OUTING' || it.kind === 'BUSY' ? 'warn' : 'info') : 'info';
+      push(String(it.type) + String(it.refId ?? it.startMin), it.startMin, end, cls, it.time ?? '', it.title || it.label || '', it);
+    }
+    for (const f of d.free ?? []) push('F' + f.startMin, f.startMin, f.endMin, 'free', f.time, '可约', f);
+    blocks.sort((x: any, y: any) => x.top - y.top);
+    const freeMin = (d.free ?? []).reduce((s: number, f: any) => s + (f.endMin - f.startMin), 0);
+    return { ...d, blocks, freeHours: freeMin ? `${Math.round(freeMin / 30) / 2}h` : '' };
+  }),
+);
+
+/** 周历拖拽选时段：30 分钟吸附，松手出快捷 chip（事项可不填） */
+const wkDragging = ref(false);
+const wkSel = ref<{ col: number; a: number; b: number } | null>(null);
+const wkSelTop = computed(() => (wkSel.value ? ((wkSel.value.a - WK_START) / 60) * WK_PX : 0));
+const wkSelHeight = computed(() => (wkSel.value ? Math.max(((wkSel.value.b - wkSel.value.a) / 60) * WK_PX, 14) : 0));
+const wkSelText = computed(() => (wkSel.value ? `${minToHHmm(wkSel.value.a)}–${minToHHmm(wkSel.value.b)}` : ''));
+const wkChip = ref({ open: false, col: -1, mode: '' as '' | 'create' | 'free' | 'event', top: 0, a: 0, b: 0, date: '', target: null as any });
+function closeWkChip() {
+  wkChip.value = { open: false, col: -1, mode: '', top: 0, a: 0, b: 0, date: '', target: null };
+  wkSel.value = null;
+}
+function wkYToMin(y: number) {
+  return Math.max(WK_START, Math.min(WK_END, Math.round((WK_START + (y / WK_PX) * 60) / 30) * 30));
+}
+function wkOffY(e: PointerEvent) {
+  const el = e.currentTarget as HTMLElement;
+  return e.clientY - el.getBoundingClientRect().top;
+}
+function onWkDown(e: PointerEvent, col: number) {
+  if (onBlockHit(e.target)) return;
+  if (e.pointerType !== 'mouse') return; // 触屏：点一下出 chip（交给 click），不劫持滚动手势
+  closeWkChip();
+  wkDragging.value = true;
+  const m = wkYToMin(wkOffY(e));
+  wkSel.value = { col, a: m, b: Math.min(WK_END, m + 30) };
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+function onWkMove(e: PointerEvent) {
+  if (!wkDragging.value || !wkSel.value) return;
+  const m = wkYToMin(wkOffY(e));
+  const a = Math.min(wkSel.value.a, m);
+  const b = Math.max(wkSel.value.a, m);
+  wkSel.value = { col: wkSel.value.col, a, b: Math.max(b, a + 30) };
+}
+function onWkUp() {
+  if (!wkDragging.value) return;
+  wkDragging.value = false;
+  if (wkSel.value) {
+    const { col, a, b } = wkSel.value;
+    wkChip.value = { open: true, col, mode: 'create', top: Math.max(4, wkSelTop.value - 6), a, b, date: weekDays.value[col]?.date ?? '', target: null };
   }
+}
+function onWkCancel() {
+  wkDragging.value = false;
+  wkSel.value = null;
+}
+function onWkClick(e: PointerEvent, col: number) {
+  if (wkChip.value.open || suppressClick.value) return;
+  if (onBlockHit(e.target)) return;
+  const m = wkYToMin(wkOffY(e));
+  const a = m;
+  const b = Math.min(WK_END, m + 60);
+  wkSel.value = { col, a, b };
+  wkChip.value = { open: true, col, mode: 'create', top: Math.max(4, ((a - WK_START) / 60) * WK_PX - 6), a, b, date: weekDays.value[col]?.date ?? '', target: null };
+}
+function onWkBlockClick(b: any, col: number) {
+  closeWkChip();
+  const it = b.raw;
+  const date = weekDays.value[col]?.date ?? '';
+  if (b.cls === 'free') {
+    wkSel.value = { col, a: b.a, b: b.b };
+    wkChip.value = { open: true, col, mode: 'free', top: Math.max(4, b.top - 6), a: b.a, b: b.b, date, target: it };
+  } else if (it?.type === 'EVENT') {
+    wkChip.value = { open: true, col, mode: 'event', top: Math.max(4, b.top - 6), a: b.a, b: b.b, date, target: it };
+  }
+  // 会议/预约/任务块不弹菜单（title 悬浮看详情）
+}
+function kindCn(k: string) {
+  return k === 'FREE' ? '已开放可约' : k === 'OUTING' ? '已标外出' : k === 'BUSY' ? '已标占用' : '已添加安排';
+}
+function afterScheduleChange(date?: string) {
+  loadWeek();
+  if (date && date === dateStr.value) load(true);
+  loadMonth();
+}
+async function wkQuickCreate(kind: string) {
+  const c = wkChip.value;
+  if (!c.date) return;
+  saving.value = true;
+  try {
+    const payload = { date: c.date, startMin: minToHHmm(c.a), endMin: minToHHmm(c.b), kind, title: kind === 'EVENT' ? '日程安排' : '' };
+    const r = await agentApi.createEvent(payload);
+    if (r?.warning) ElMessage.warning(r.warning);
+    else ElMessage.success(`${c.date.slice(5)} ${minToHHmm(c.a)}–${minToHHmm(c.b)} ${kindCn(kind)}`);
+    closeWkChip();
+    afterScheduleChange(c.date);
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '添加失败');
+  } finally {
+    saving.value = false;
+  }
+}
+function wkOpenDetail() {
+  const c = wkChip.value;
+  if (!c.date) return;
+  dateStr.value = c.date;
+  editId.value = '';
+  formWarning.value = '';
+  form.value = { kind: 'EVENT', title: '', note: '', start: minToHHmm(c.a), end: minToHHmm(c.b) };
+  dlg.value = true;
+  closeWkChip();
+}
+async function wkCancelOpen() {
+  const c = wkChip.value;
+  const day = weekDays.value[c.col];
+  const covering = (day?.items ?? []).filter((x: any) => x.type === 'EVENT' && x.kind === 'FREE' && x.startMin <= c.a && x.endMin >= c.b);
+  if (!covering.length) {
+    ElMessage.info('该时段来自每周固定排班：请到排班设置里调整，或先用「外出/占用」盖住这段时间');
+    closeWkChip();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(`取消开放 ${c.date.slice(5)} ${minToHHmm(c.a)}–${minToHHmm(c.b)}？成员将约不到这段时间。`, '取消开放', { type: 'warning' });
+  } catch {
+    return;
+  }
+  try {
+    for (const ev of covering) await agentApi.deleteEvent(ev.refId);
+    ElMessage.success('已取消开放');
+    closeWkChip();
+    afterScheduleChange(c.date);
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '操作失败');
+  }
+}
+function wkEditEvent() {
+  const c = wkChip.value;
+  const it = c.target;
+  if (!it || !c.date) return;
+  dateStr.value = c.date;
+  editId.value = String(it.refId ?? '');
+  formWarning.value = '';
+  form.value = {
+    kind: it.kind || 'EVENT',
+    title: it.title === '日程安排' ? '' : it.title || '',
+    note: it.note ?? '',
+    start: minToHHmm(it.startMin),
+    end: minToHHmm(typeof it.endMin === 'number' && it.endMin > it.startMin ? it.endMin : it.startMin + 30),
+  };
+  dlg.value = true;
+  closeWkChip();
+}
+async function wkDeleteEvent() {
+  const c = wkChip.value;
+  const it = c.target;
+  if (!it?.refId) return;
+  try {
+    await ElMessageBox.confirm(`删除「${it.time} ${it.title || it.label || ''}」？`, '删除日程', { type: 'warning' });
+  } catch {
+    return;
+  }
+  try {
+    await agentApi.deleteEvent(it.refId);
+    ElMessage.success('已删除');
+    closeWkChip();
+    afterScheduleChange(c.date);
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '删除失败');
+  }
+}
+
+/** ---- 单日网格拖拽后快捷 chip（点一下即建，事项可不填） ---- */
+const dgChip = ref({ open: false, top: 0, left: 0, a: 0, b: 0 });
+function closeDgChip() {
+  dgChip.value.open = false;
+  sel.value = null;
+}
+function openDgChip(a: number, b: number) {
+  const pos = cardPos(a);
+  dgChip.value = { open: true, top: pos.top, left: pos.left, a, b };
+}
+async function dgQuickCreate(kind: string) {
+  const c = dgChip.value;
+  saving.value = true;
+  try {
+    const payload = { date: dateStr.value, startMin: minToHHmm(c.a), endMin: minToHHmm(c.b), kind, title: kind === 'EVENT' ? '日程安排' : '' };
+    const r = await agentApi.createEvent(payload);
+    if (r?.warning) ElMessage.warning(r.warning);
+    else ElMessage.success(kindCn(kind));
+    closeDgChip();
+    load(true);
+    afterScheduleChange();
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message ?? '添加失败');
+  } finally {
+    saving.value = false;
+  }
+}
+function dgOpenDetail() {
+  const { a, b } = dgChip.value;
+  dgChip.value.open = false;
+  openCard(a, b);
 }
 
 function goMeeting(it: any) {
@@ -803,7 +1108,10 @@ defineExpose({ reload: () => load() });
 .month-cell.out { opacity: 0.38; cursor: default; background: var(--el-fill-color-lighter); }
 .month-cell.out:hover { background: var(--el-fill-color-lighter); }
 .month-cell.today { border: 1.5px solid var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.month-date { font-size: 12px; font-weight: 500; color: var(--el-text-color-primary); margin-bottom: 3px; }
+.month-date { font-size: 12px; font-weight: 500; color: var(--el-text-color-primary); margin-bottom: 3px; display: flex; align-items: center; justify-content: space-between; }
+.mc-add { border: none; background: var(--el-fill-color); color: var(--el-text-color-secondary); border-radius: 50%; width: 18px; height: 18px; line-height: 16px; font-size: 13px; cursor: pointer; opacity: 0; transition: opacity 0.15s; padding: 0; }
+.month-cell:hover .mc-add { opacity: 1; }
+.mc-add:hover { background: var(--el-color-primary-light-8); color: var(--el-color-primary); }
 .month-date.sun { color: var(--el-color-danger); }
 .month-cell.today .month-date { color: var(--el-color-primary); }
 .month-chip {
@@ -828,20 +1136,63 @@ defineExpose({ reload: () => load() });
   .mc-time { display: none; }
   .month-stat-tip { display: none; }
 }
-.myday-week-hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+/* ---- 周历视图（本周一~周日 7 列×小时网格）---- */
+.wk-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
 .myday-sec-title { font-weight: 500; font-size: 14px; }
-.myday-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-.week-col { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px; min-height: 90px; }
-.week-col.today { border-color: var(--el-color-primary); }
-.week-date { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-.week-date small { color: var(--el-text-color-secondary); font-weight: 400; margin-left: 4px; }
-.week-free { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
-.week-slot { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--el-color-success); background: var(--el-color-success-light-9); border-radius: 4px; padding: 2px 6px; }
-.week-none { font-size: 12px; color: var(--el-text-color-placeholder); margin-bottom: 6px; }
-.week-busy { display: flex; flex-direction: column; gap: 3px; }
-.week-busy-item { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-lg { font-size: 12px; color: var(--el-text-color-secondary); }
+.wk-lg .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.wk-tip { margin-left: auto; }
+.wk-tip b { color: var(--el-color-primary); }
+.wk-grid { display: flex; align-items: flex-start; overflow-x: auto; }
+.wk-gutter { width: 52px; flex-shrink: 0; }
+.wk-corner { height: 30px; font-size: 11px; color: var(--el-text-color-placeholder); text-align: right; padding-right: 8px; line-height: 30px; }
+.wk-hour { font-size: 11px; color: var(--el-text-color-secondary); text-align: right; padding-right: 8px; transform: translateY(-6px); font-variant-numeric: tabular-nums; }
+.wk-col {
+  position: relative; flex: 1 1 0; min-width: 108px; border-left: 1px solid var(--el-border-color-lighter);
+  display: flex; flex-direction: column;
+}
+.wk-col:first-of-type { border-left: none; }
+.wk-col.today { background: var(--el-color-primary-light-9); border-radius: 0 0 6px 6px; }
+.wk-day-hd { display: flex; align-items: baseline; justify-content: space-between; padding: 0 6px 4px; height: 30px; box-sizing: border-box; }
+.wk-day-date { font-size: 13px; font-weight: 500; }
+.wk-day-date small { color: var(--el-text-color-secondary); font-weight: 400; margin-left: 3px; }
+.wk-day-free { font-size: 11px; color: var(--el-color-success); font-variant-numeric: tabular-nums; }
+.wk-day-free.none { color: var(--el-text-color-placeholder); }
+.wk-track {
+  position: relative; cursor: crosshair; user-select: none; touch-action: pan-y;
+  background-image:
+    linear-gradient(to bottom, var(--el-border-color-lighter) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--el-fill-color-light) 1px, transparent 1px);
+}
+.wk-block { position: absolute; left: 2px; right: 2px; z-index: 1; border-radius: 4px; padding: 0 4px; font-size: 11px; line-height: 1.4; overflow: hidden; cursor: pointer; white-space: nowrap; }
+.wb-time { opacity: 0.7; margin-right: 3px; font-variant-numeric: tabular-nums; }
+.wb-title { font-weight: 500; }
+.wb-info { background: var(--el-color-primary-light-8); border-left: 2px solid var(--el-color-primary); color: var(--el-color-primary-dark-2); }
+.wb-warn { background: var(--el-color-danger-light-8); border-left: 2px solid var(--el-color-danger); color: var(--el-color-danger-dark-2); }
+.wb-free { background: var(--el-color-success-light-7); border-left: 2px solid var(--el-color-success); color: var(--el-color-success-dark-2); }
+/* 快捷 chip 条（周历 + 单日网格共用） */
+.wk-chipbar {
+  position: absolute; z-index: 6; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 5px 6px; background: var(--el-bg-color); border: 1px solid var(--el-border-color);
+  border-radius: 8px; box-shadow: var(--el-box-shadow-light); max-width: calc(100% - 8px); left: 4px;
+}
+.dg-chipbar { width: max-content; }
+.wk-chip { border: none; cursor: pointer; font-size: 12px; padding: 3px 9px; border-radius: 12px; white-space: nowrap; }
+.wc-free { background: var(--el-color-success-light-8); color: var(--el-color-success-dark-2); }
+.wc-event { background: var(--el-color-warning-light-8); color: var(--el-color-warning-dark-2); }
+.wc-outing { background: var(--el-color-danger-light-8); color: var(--el-color-danger-dark-2); }
+.wc-busy { background: var(--el-fill-color); color: var(--el-text-color-regular); }
+.wc-more { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.wc-cancel-open { background: var(--el-color-danger-light-8); color: var(--el-color-danger-dark-2); }
+.wc-del { background: var(--el-color-danger-light-8); color: var(--el-color-danger-dark-2); }
+.wc-x { background: var(--el-fill-color-light); color: var(--el-text-color-secondary); padding: 3px 7px; }
+.wk-chip-note { font-size: 11px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) {
-  .myday-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wk-gutter { width: 40px; }
+  .wk-col { min-width: 84px; }
+  .wk-tip { display: none; }
+}
+@media (max-width: 900px) {
   .dg-gutter { width: 40px; }
   .dg-card { width: min(300px, calc(100vw - 40px)); }
 }
