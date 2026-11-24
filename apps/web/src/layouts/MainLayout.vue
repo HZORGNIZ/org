@@ -20,6 +20,9 @@
         <el-menu-item index="/projects">
           <el-icon><FolderOpened /></el-icon><span>项目管理</span>
         </el-menu-item>
+        <el-menu-item index="/dashboard">
+          <el-icon><DataAnalysis /></el-icon><span>数据看板</span>
+        </el-menu-item>
         <el-menu-item v-if="auth.isAdmin || auth.isDeptLeader" index="/departments">
           <el-icon><OfficeBuilding /></el-icon><span>部门管理</span>
         </el-menu-item>

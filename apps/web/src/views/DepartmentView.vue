@@ -135,6 +135,11 @@
           <DeptWorkBoard :dept-id="deptId" @open-task="(id: string) => $router.push('/tasks?open=' + id)" />
         </el-tab-pane>
 
+        <!-- 部门架构图：复用管理后台的组织架构图（公司→部门→成员懒加载），仅管理员/部门负责人可见 -->
+        <el-tab-pane v-if="detail.canManage" label="架构图" name="orgchart" lazy>
+          <DeptOrgChart />
+        </el-tab-pane>
+
         <!-- 部门复盘：按月发起 + AI 生成（任务/工时/日报周报/PBC/项目进展聚合）+ 管理员定稿，成员可见定稿结论 -->
         <el-tab-pane label="复盘" name="retro" lazy>
           <DeptRetroPanel :department-id="deptId" :can-manage="detail.canManage" />
@@ -434,6 +439,7 @@ import PbcViewerDialog from '../components/PbcViewerDialog.vue';
 import PbcRanking from '../components/PbcRanking.vue';
 import DeptWorkBoard from '../components/DeptWorkBoard.vue';
 import DeptRetroPanel from '../components/DeptRetroPanel.vue';
+import DeptOrgChart from '../components/DeptOrgChart.vue';
 
 /** embedded：内嵌到「管理后台 → 部门管理」tab 时，隐藏自身页头文字（保留部门切换），由容器提供页面标题 */
 defineProps<{ embedded?: boolean }>();

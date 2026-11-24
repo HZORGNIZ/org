@@ -192,6 +192,17 @@
                 >🕐 {{ s }}</el-button>
                 <div class="agent-clarify-tip">{{ m.action.hint || '点一个时段，我按它生成预约确认卡；也可以直接打字说另一个时间' }}</div>
               </div>
+              <!-- 可约时间表卡：按天分组的可视化空档，点时段即发起预约 -->
+              <div v-else-if="m.action.kind === 'BOOKING_AVAIL_GRID'" class="agent-avail-grid">
+                <div v-for="(d, di) in m.action.days" :key="di" class="ag-row">
+                  <span class="ag-date">{{ String(d.date).slice(5) }}<i class="ag-wd">{{ d.weekday }}</i></span>
+                  <span v-if="d.slots?.length" class="ag-slots">
+                    <button v-for="(s, si) in d.slots" :key="si" class="ag-chip" :title="`约 ${d.date} ${s.range}`" @click="pickAvailSlot(m, d, s)">{{ s.range }}</button>
+                  </span>
+                  <span v-else class="ag-none">{{ d.note || '不可约' }}</span>
+                </div>
+                <div class="agent-clarify-tip">{{ m.action.hint || '点击时段直接发起预约（还需确认一次）' }}</div>
+              </div>
               <div v-else class="agent-action-ops">
                 <el-button size="small" type="primary" :loading="m.action.running" @click="confirmAction(m)">确认执行</el-button>
                 <el-button size="small" text @click="cancelAction(m)">取消</el-button>
@@ -343,6 +354,7 @@ const ACTION_TITLES: Record<string, string> = {
   DAILY_CHASE: '催今日日报（分群点名＋站内提醒）',
   RISK_ALERT: '风险项目提醒对应负责人',
   BOOKING_SLOT_PICK: '选择老师的可约时段（点一个时段，我来出预约确认卡）',
+  BOOKING_AVAIL_GRID: '老师的可约时间表（点绿色时段直接发起预约）',
   BOOKING_CREATE: '发起沟通预约（确认后通知老师，并推送到项目PUSH群）',
   TIME_SLOT_SET: '登记临时可约/不可约时段',
   BOOKING_DECIDE: '审批沟通预约（结果通知对方并推送到项目PUSH群）',
@@ -800,6 +812,14 @@ function pickSlot(m: AgentMsg, slot: string) {
   m.decided = 'done';
   m.resultLabel = '已选择时段：' + slot;
   send('我选这个时段：' + slot);
+}
+
+/** 可约时间表点选：点时段=把「日期（星期）时段」作为新消息发出，模型下一轮出 BOOKING_CREATE 确认卡 */
+function pickAvailSlot(m: AgentMsg, day: any, slot: any) {
+  if (sending.value || m.decided) return;
+  m.decided = 'done';
+  m.resultLabel = '已选择时段：' + day.date + ' ' + slot.range;
+  send(`我想约${m.action.ownerName ?? ''}老师 ${day.date}（${day.weekday}）${slot.range}`);
 }
 
 async function send(preset?: string) {
@@ -1429,6 +1449,20 @@ defineExpose({ checkConfig, start });
 .agent-action-ops { margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end; }
 .agent-slot-pick { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .agent-slot-pick .agent-clarify-tip { width: 100%; }
+/* 可约时间表卡：按天分组、绿色可点选时段 chip */
+.agent-avail-grid { margin-top: 8px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 10px 12px; background: #fff; max-width: 420px; }
+.agent-avail-grid .ag-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.agent-avail-grid .ag-row:last-of-type { border-bottom: none; }
+.agent-avail-grid .ag-date { flex-shrink: 0; width: 96px; font-size: 12.5px; color: var(--el-text-color-regular); }
+.agent-avail-grid .ag-wd { font-style: normal; color: var(--el-text-color-secondary); margin-left: 4px; font-size: 12px; }
+.agent-avail-grid .ag-slots { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-avail-grid .ag-chip {
+  padding: 2px 10px; height: 24px; line-height: 20px; font-size: 12px; border-radius: 12px; cursor: pointer;
+  background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-5); color: var(--el-color-primary);
+}
+.agent-avail-grid .ag-chip:hover { background: var(--el-color-primary); border-color: var(--el-color-primary); color: #fff; }
+.agent-avail-grid .ag-none { font-size: 12px; color: var(--el-text-color-placeholder); }
+.agent-avail-grid .agent-clarify-tip { margin-top: 6px; }
 .agent-action-done { font-size: 12px; color: #67c23a; background: #f0f9eb; border-radius: 8px; padding: 6px 10px; }
 .agent-done-link { color: #428bff; margin-left: 8px; text-decoration: none; font-weight: 600; }
 .agent-action-cancelled { color: #909399; background: #f4f4f5; }

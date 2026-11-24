@@ -23,6 +23,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { ResourcesModule } from './modules/resources/resources.module';
 import { RetrospectivesModule } from './modules/retrospectives/retrospectives.module';
 import { SopsModule } from './modules/sops/sops.module';
+import { StatsModule } from './modules/stats/stats.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -39,6 +40,7 @@ import { UsersModule } from './modules/users/users.module';
     PbcModule,
     RetrospectivesModule,
     SopsModule,
+    StatsModule,
     KnowledgeModule,
     DocumentsModule,
     ResourcesModule,

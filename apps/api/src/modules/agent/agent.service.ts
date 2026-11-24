@@ -76,6 +76,7 @@ const ACTION_KINDS = new Set([
   'DAILY_CHASE',
   'RISK_ALERT',
   'BOOKING_SLOT_PICK',
+  'BOOKING_AVAIL_GRID',
   'BOOKING_CREATE',
   'TIME_SLOT_SET',
   'BOOKING_DECIDE',
@@ -135,7 +136,7 @@ export const AGENT_BOTS: AgentBotDef[] = [
     ownerName: undefined,
     prompt: 'manager.bot.schedule',
     tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
-    actions: new Set(['BOOKING_SLOT_PICK', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
+    actions: new Set(['BOOKING_SLOT_PICK', 'BOOKING_AVAIL_GRID', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
   },
 ];
 
@@ -1633,9 +1634,8 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         ...weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
         ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
       ];
-      // 老师还没登记排班时按工作日 9:00-18:00 给参考空档（预约仍需老师确认），避免功能对未登记的人完全不可用
-      const fallbackBase = !base.length && dow <= 4;
-      const baseRanges = fallbackBase ? [{ startMin: 9 * 60, endMin: 18 * 60 }] : base;
+      // 只认老师登记的排班/开放时段：没登记的天一律不可约（绝不把老师没开放的时间当成空闲）
+      const baseRanges = base;
       const blocks: { startMin: number; endMin: number }[] = dayOffs
         .filter((o) => o.kind === 'BUSY')
         .map((o) => ({ startMin: o.startMin, endMin: o.endMin }));
@@ -1671,8 +1671,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         freeRanges,
         busy: busy.sort((a, b) => a.time.localeCompare(b.time)),
       };
-      if (fallbackBase) row.note = '老师还没登记常规可约时间，这里按工作日 09:00-18:00 给参考，需老师确认后才生效';
-      else if (!base.length) row.note = '未登记可约时间（非工作日）';
+      if (!base.length) row.note = '老师未登记可约时间';
       else if (!freeRanges.length) row.note = '当天已排满';
       days.push(row);
     }
@@ -1739,7 +1738,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       from: fmtBeijingDate(from),
       to: fmtBeijingDate(to),
       days: data.days.map((d) => ({ date: d.date, weekday: d.weekday, free: d.free, busy: d.busy, note: d.note })),
-      hint: 'free 为可约空档；「未登记可约时间」的天说明老师还没排工作时段，可建议老师本人补登记',
+      hint: 'free 为可约空档，完全来自老师登记的排班与开放时段；free 为空的天一律不可约，绝不能向用户推荐或假装有空',
     };
   }
 
@@ -2277,6 +2276,8 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
           return await this.planRiskAlert(me, scope, action);
         case 'BOOKING_SLOT_PICK':
           return await this.planBookingSlotPick(me, bot, action);
+        case 'BOOKING_AVAIL_GRID':
+          return await this.planBookingAvailGrid(me, bot, action);
         case 'BOOKING_CREATE':
           return await this.planBookingCreate(me, bot, action);
         case 'TIME_SLOT_SET':
@@ -3786,6 +3787,64 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       slots,
       hint: '点一个时段，我按它生成预约确认卡；也可以直接打字说另一个时间',
     };
+  }
+
+  /** 可约时间表卡（可视化）：服务端直接算未来 7 天空档结构化返回，用户点选时段 → 下一轮出 BOOKING_CREATE 确认卡 */
+  private async planBookingAvailGrid(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { kind: 'BOOKING_AVAIL_GRID', needClarify: 'owner', reason: `被约人「${bot?.ownerName ?? ''}」账号还没绑定或已停用，暂时不能预约，请联系管理员` };
+    if (owner.id === me.id) {
+      return { kind: 'BOOKING_AVAIL_GRID', needClarify: 'self', reason: '你是被约老师本人，不需要看约你的时间表；想登记可约时间直接说「周三下午2点后有空」' };
+    }
+    const from = this.bjDayStart(new Date());
+    const to = this.addDays(from, 6);
+    const data = await this.computeAvailability(owner.id, from, to);
+    const days = data.days.map((d) => ({
+      date: d.date,
+      weekday: d.weekday,
+      slots: d.freeRanges.map((r) => ({ range: slotRangeLabel(r.startMin, r.endMin), startMin: r.startMin, endMin: r.endMin })),
+      note: d.note ?? null,
+    }));
+    const freeCount = days.reduce((n, d) => n + d.slots.length, 0);
+    // 空档全无：提醒老师去登记可约时间（每人每日最多一次），同时卡片上给用户兜底话术
+    if (!freeCount) await this.remindOwnerSchedule(owner.id, owner.name, me.name);
+    return {
+      kind: 'BOOKING_AVAIL_GRID',
+      label: `${owner.name}老师 · 未来 7 天可约时间`,
+      ownerName: owner.name,
+      days,
+      empty: !freeCount,
+      hint: freeCount
+        ? '绿色为老师开放的可约时段，点击直接发起预约（还需确认一次）；时段完全来自老师登记的可约时间'
+        : `${owner.name}老师暂未开放可约时间，我已提醒老师尽快在「我的日程」登记；你可以先把要沟通的事由告诉我，我转告老师`,
+    };
+  }
+
+  /** 有人想约但老师没登记可约时间：提醒老师去登记（站内信+钉钉私聊，Setting 频控每人每日最多一次） */
+  private async remindOwnerSchedule(ownerId: string, ownerName: string, requesterName: string) {
+    try {
+      const key = `schedule-remind:${ownerId}`;
+      const today = fmtBeijingDate(new Date());
+      const prev = await this.prisma.setting.findUnique({ where: { key } });
+      if ((prev?.value as any)?.date === today) return;
+      await this.prisma.setting.upsert({ where: { key }, create: { key, value: { date: today } }, update: { value: { date: today } } });
+      await this.notifications.create(ownerId, {
+        type: NotificationType.SYSTEM,
+        title: '有人想约你，但你还没开放可约时间',
+        content: `${requesterName} 想约你沟通，但系统里没有你的可约时间。去「我的日程」把有空的时间点「开放可约」，成员就能直接看到并预约了。`,
+        link: '/',
+      });
+      const u = await this.prisma.user.findFirst({ where: { id: ownerId }, select: { id: true, name: true, phone: true } });
+      if (u) {
+        const target = await this.dm.resolveTarget(u);
+        await this.dm.sendDm(
+          target.to,
+          `【可约时间提醒】${requesterName} 想约你沟通，但你在系统里还没登记可约时间。\n请到「我的日程」把有空的时间点「开放可约」（或每周排班里维护固定时间），成员约时间时就能直接看到你的空档。\n${webLink('/')}`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(`可约时间登记提醒发送失败（${ownerName}）：${e?.message ?? e}`);
+    }
   }
 
   private async planBookingCreate(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {

@@ -345,6 +345,7 @@ export class DocumentsService {
         name: f.name,
         mimeType: f.mimeType,
         size: f.size,
+        docType: f.docType,
         uploaderName: f.uploader?.name ?? '',
         updatedAt: f.updatedAt,
         createdAt: f.createdAt,
@@ -359,6 +360,7 @@ export class DocumentsService {
         name: d.title,
         mimeType: 'text/markdown',
         size: Buffer.byteLength(d.content ?? '', 'utf8'),
+        docType: d.docType,
         uploaderName: d.author?.name ?? '',
         updatedAt: d.updatedAt,
         createdAt: d.createdAt,
@@ -880,6 +882,8 @@ export class DocumentsService {
 
   async removeFile(user: SpaceUser, id: string) {
     const file = await this.findVisibleFile(id, user);
+    // 项目文件一律不可删除（误传可重新上传替换版本）：仅部门空间文件允许删除
+    if (file.projectId) throw new BadRequestException('项目文件不可删除（可通过同名重新上传替换版本）');
     const owner = await this.spaceOfFile({ departmentId: file.departmentId, projectId: file.projectId });
     if (!this.canManageFile(file, user, owner?.managers ?? [])) {
       throw new ForbiddenException('仅上传者、空间负责人或管理员可删除该文件');
@@ -915,6 +919,8 @@ export class DocumentsService {
   /** 删除历史版本（不可删当前版本，当前内容始终保留） */
   async removeVersion(user: SpaceUser, id: string, version: number) {
     const file = await this.findVisibleFile(id, user);
+    // 项目文件的版本记录同样不可删除（保留完整历史）
+    if (file.projectId) throw new BadRequestException('项目文件的历史版本不可删除');
     const owner = await this.spaceOfFile({ departmentId: file.departmentId, projectId: file.projectId });
     if (!this.canManageFile(file, user, owner?.managers ?? [])) {
       throw new ForbiddenException('仅上传者、空间负责人或管理员可删除版本');

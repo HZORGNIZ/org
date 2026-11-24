@@ -76,6 +76,13 @@ export const departmentsApi = {
     api.put<any>('/departments/report-to', { userId, parentId }),
 };
 
+// ---------- 数据看板 ----------
+export const statsApi = {
+  /** 按部门/项目/人员的聚合排行（scope: dept|project|user；period: week|month|quarter） */
+  dashboard: (scope: 'dept' | 'project' | 'user', period: 'week' | 'month' | 'quarter') =>
+    api.get<any>(`/stats/dashboard?scope=${scope}&period=${period}`),
+};
+
 // ---------- 成员画像 ----------
 export const membersApi = {
   /** GET /members/:id：工时/日报/项目/任务/会议活动/贡献聚合（私有块由后端按档位裁剪） */

@@ -40,6 +40,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'board', redirect: { name: 'reports', query: { tab: 'task', ttab: 'board' } } },
       { path: 'projects', name: 'projects', component: () => import('../views/ProjectsView.vue') },
       { path: 'projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetailView.vue') },
+      // 数据看板：按部门/项目/人员的排行与表格（管理员看全公司，负责人看管辖范围，成员看自己相关）
+      { path: 'dashboard', name: 'dashboard', component: () => import('../views/DashboardView.vue') },
       { path: 'projects/:id/weekly-report', name: 'project-weekly-report', component: () => import('../views/ProjectWeeklyReportView.vue') },
       // 侧边菜单「部门」已并进「管理后台 → 部门管理」tab（管理员用）；这里保留路由，作为普通成员从首页「我的部门」进入的只读入口
       { path: 'departments', name: 'departments', component: () => import('../views/DepartmentView.vue') },

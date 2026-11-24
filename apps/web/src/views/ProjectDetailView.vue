@@ -691,7 +691,7 @@
             <el-select v-model="weekDocKey" size="small" style="width: 130px">
               <el-option v-for="w in weekKeys" :key="w" :label="w" :value="w" />
             </el-select>
-            <el-button size="small" type="primary" plain @click="goDocCenter">到文档中心上传</el-button>
+            <el-button size="small" type="primary" plain @click="goDocCenter">到文件页上传</el-button>
           </div>
         </div>
         <div v-if="!weekDocs.length" class="muted doc-empty">{{ weekDocKey === currentWeekKey ? '本周还没有人上传文档' : '该周没有文档记录' }}</div>
@@ -714,42 +714,65 @@
       </el-tab-pane>
 
       <el-tab-pane name="docs">
-        <template #label>项目文档</template>
-        <!-- 文档中心：在线文档 + 文件空间文件统一列表，在线预览/下载/编辑，顶部一键上传本周文档 -->
+        <template #label>项目文件</template>
+        <!-- 文件页（扁平化改版）：一行一文件，类型小标签可选可手输，3D 打印格式直接上传（不预览只下载），可替换不可删除 -->
         <div class="page-card">
           <div class="block-title-row">
-            <span class="block-title">项目文档中心</span>
+            <span class="block-title">项目文件</span>
             <el-input
               v-model="docSearch"
               size="small"
-              placeholder="搜索文档…"
+              placeholder="搜索文件名…"
               clearable
-              style="width: 180px"
+              style="width: 170px"
             />
+            <el-select
+              v-model="uploadDocType"
+              size="small"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              placeholder="文件类型标签（可选）"
+              style="width: 180px"
+            >
+              <el-option v-for="t in uploadTypeOptions" :key="t" :label="t" :value="t" />
+            </el-select>
             <el-button size="small" @click="docFormVisible = true">+ 新建在线文档</el-button>
-            <el-button size="small" @click="docSpaceVisible = true">文件空间</el-button>
-            <el-button size="small" type="primary" :loading="weekUploading" @click="weekFileInput?.click()">上传本周文档</el-button>
-            <input ref="weekFileInput" type="file" multiple hidden @change="onWeekFilesPicked" />
+            <el-button size="small" type="primary" :loading="weekUploading" @click="fileUploadInput?.click()">上传文件</el-button>
+            <el-button size="small" plain @click="weekFileInput?.click()">上传周报文档</el-button>
+            <input ref="fileUploadInput" type="file" multiple hidden @change="onFilesPicked(false)" />
+            <input ref="weekFileInput" type="file" multiple hidden @change="onFilesPicked(true)" />
+            <input ref="replaceFileInput" type="file" hidden @change="onReplacePicked" />
           </div>
-          <div class="doc-chips">
-            <span v-for="c in docChipList" :key="c.key" class="doc-chip" :class="{ active: docTab === c.key }" @click="docTab = c.key">
-              {{ c.label }} {{ c.count }}
-            </span>
+          <div v-if="!docCenterFiltered.length" class="muted doc-empty">
+            {{ docSearch ? '没有匹配的文件' : '还没有文件，点右上角「上传文件」（支持 STL / OBJ / STEP / 3MF / GLB 等 3D 格式）' }}
           </div>
-          <div v-if="!docCenterFiltered.length" class="muted doc-empty">没有符合条件的文档</div>
           <div v-for="it in docCenterFiltered" :key="it.kind + it.id" class="doccenter-row">
             <span class="doc-badge" :class="'b-' + badgeOf(it)">{{ badgeText(it) }}</span>
             <div class="doccenter-main" @click="previewDoc(it)">
               <div class="ellipsis doc-name">{{ it.name }}</div>
               <div class="doccenter-meta">{{ docCenterMeta(it) }}</div>
             </div>
-            <el-tag size="small" effect="plain" class="doc-week-tag">{{ it.weekKey }}</el-tag>
-            <el-button size="small" text type="primary" @click="previewDoc(it)">预览</el-button>
-            <el-button v-if="it.kind === 'file'" size="small" text @click="downloadDocFile(it)">下载</el-button>
+            <el-tag
+              v-if="it.kind === 'file'"
+              size="small"
+              :type="docTypeMeta(it.docType).color"
+              effect="plain"
+              class="doc-type-tag"
+              title="点击修改类型标签"
+              @click="openTypeEdit(it)"
+            >
+              {{ docTypeMeta(it.docType).label }}
+            </el-tag>
+            <el-tag v-else size="small" type="success" effect="plain" class="doc-type-tag">在线文档</el-tag>
+            <el-button v-if="canPreview(it)" size="small" text type="primary" @click="previewDoc(it)">预览</el-button>
+            <el-button v-else size="small" text type="primary" @click="downloadDocFile(it)">下载</el-button>
+            <el-button v-if="it.kind === 'file'" size="small" text @click="startReplace(it)">替换</el-button>
             <el-button v-else size="small" text @click="openProjectDoc(it)">编辑</el-button>
           </div>
           <div class="muted doc-empty" style="margin-top: 10px">
-            上传的文档自动归入本周（按 ISO 周计）；「周报文档」类可在项目周报页按周查看
+            类型标签点击可改（预设可选、也可手动输入）；文件不支持删除，同名重新上传即替换为新版本，历史版本可回看下载
           </div>
         </div>
       </el-tab-pane>
@@ -1089,6 +1112,18 @@
 
     <!-- 通用文档预览（PDF/图片/docx/文本/csv，在线文档走 Markdown 渲染） -->
     <DocPreview v-model="docPreviewVisible" :item="docPreviewItem" />
+
+    <!-- 文件类型标签编辑（预设可选 + 手动输入，单选） -->
+    <el-dialog v-model="typeEditVisible" title="文件类型标签" width="min(92vw, 380px)" append-to-body>
+      <el-select v-model="typeEditValue" filterable allow-create default-first-option clearable placeholder="选择或输入类型" style="width: 100%">
+        <el-option v-for="t in uploadTypeOptions" :key="t" :label="t" :value="t" />
+      </el-select>
+      <div class="muted" style="font-size: 12px; margin-top: 8px">预设可直接选，也可输入自定义类型（12 字以内）</div>
+      <template #footer>
+        <el-button @click="typeEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="typeSaving" @click="saveTypeEdit">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 快速写日报弹窗：与首页快速日报同一条数据，同日多次提交自动合并 -->
     <el-dialog v-model="dailyComposeVisible" title="写今日日报" width="min(96vw, 560px)" append-to-body destroy-on-close>
@@ -2178,17 +2213,26 @@ async function loadProjDocs() {
   projDocs.value = await knowledgeApi.list({ projectId: id }).catch(() => []);
 }
 
-// ---- 文档中心：在线文档 + 文件空间文件统一聚合（预览/下载/按周归组） ----
-const WEEK_DOC_TYPE = '周报文档'; // 走「上传本周文档」入口的文件统一打此类型，周报页按周查看
+// ---- 项目文件页（扁平化）：在线文档 + 文件平铺一行一条，类型小标签可选可手输 ----
+const WEEK_DOC_TYPE = '周报文档'; // 「上传周报文档」入口统一打此类型，周报页按周查看
+const DOC_TYPE_3D = '3D 模型'; // 3D 打印格式自动打标（未手选类型时）
+const _3D_EXTS = ['stl', 'obj', 'step', 'stp', '3mf', 'glb', 'gltf', 'ply'];
 const docCenterItems = ref<any[]>([]);
 const docSearch = ref('');
-const docTab = ref<'all' | 'week' | 'doc' | 'other'>('all');
 const docPreviewVisible = ref(false);
 const docPreviewItem = ref<any>(null);
 const weekUploading = ref(false);
 const weekFileInput = ref<HTMLInputElement | null>(null);
+const fileUploadInput = ref<HTMLInputElement | null>(null);
+const replaceFileInput = ref<HTMLInputElement | null>(null);
+const replaceTarget = ref<any>(null);
+const uploadDocType = ref('');
+const typeEditVisible = ref(false);
+const typeEditTarget = ref<any>(null);
+const typeEditValue = ref('');
+const typeSaving = ref(false);
 
-/** ISO 周标记（与后端同算法）：2026-W47 */
+/** ISO 周标记（与后端同算法）：2026-W47（周报 tab「本周文档」标题与空态判断用） */
 function isoWeekOf(d: Date): string {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const day = date.getUTCDay() || 7;
@@ -2199,26 +2243,24 @@ function isoWeekOf(d: Date): string {
 }
 const currentWeekKey = computed(() => isoWeekOf(new Date()));
 
-const docChipList = computed<{ key: 'all' | 'week' | 'doc' | 'other'; label: string; count: number }[]>(() => {
-  const items = docCenterItems.value;
-  return [
-    { key: 'all', label: '全部', count: items.length },
-    { key: 'week', label: '周报文档', count: items.filter((i: any) => i.docType === WEEK_DOC_TYPE).length },
-    { key: 'doc', label: '在线文档', count: items.filter((i: any) => i.kind === 'doc').length },
-    { key: 'other', label: '其他文件', count: items.filter((i: any) => i.kind === 'file' && i.docType !== WEEK_DOC_TYPE).length },
-  ];
-});
-
 const docCenterFiltered = computed(() => {
   let items = docCenterItems.value;
   const kw = docSearch.value.trim().toLowerCase();
   if (kw) items = items.filter((i: any) => (i.name || '').toLowerCase().includes(kw));
-  if (docTab.value === 'week') items = items.filter((i: any) => i.docType === WEEK_DOC_TYPE);
-  else if (docTab.value === 'doc') items = items.filter((i: any) => i.kind === 'doc');
-  else if (docTab.value === 'other') items = items.filter((i: any) => i.kind === 'file' && i.docType !== WEEK_DOC_TYPE);
   return items;
 });
 
+/** 类型下拉：预置 + 3D 模型 + 本项目已用过的自定义类型 */
+const uploadTypeOptions = computed(() =>
+  docTypeOptions([...docCenterItems.value.map((i: any) => i.docType), DOC_TYPE_3D]),
+);
+
+function is3DFile(name: string): boolean {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  return _3D_EXTS.includes(ext);
+}
+
+/** 周报文档按周归组（周报 tab 继续使用） */
 const weekKeys = computed(() =>
   Array.from(new Set(docCenterItems.value.map((i: any) => i.weekKey).filter(Boolean) as string[])).sort().reverse(),
 );
@@ -2247,20 +2289,32 @@ function badgeOf(it: any): string {
   if (['doc', 'docx'].includes(ext)) return 'doc';
   if (['xls', 'xlsx', 'csv'].includes(ext)) return 'sheet';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+  if (['stl', 'obj', 'step', 'stp', '3mf', 'glb', 'gltf', 'ply'].includes(ext)) return 'threed';
   return 'file';
 }
 function badgeText(it: any): string {
-  const map: Record<string, string> = { text: '文档', pdf: 'PDF', doc: 'DOC', sheet: '表格', image: '图片', file: '文件' };
+  const map: Record<string, string> = { text: '文档', pdf: 'PDF', doc: 'DOC', sheet: '表格', image: '图片', threed: '3D', file: '文件' };
   return map[badgeOf(it)] ?? '文件';
 }
 
 function docCenterMeta(it: any): string {
   const size = it.size ? fmtSize(it.size) : '';
-  const time = it.updatedAt ? String(it.updatedAt).slice(5, 10) : '';
-  return [size, it.uploaderName, time].filter(Boolean).join(' · ');
+  const time = it.createdAt ? String(it.createdAt).slice(5, 10) : '';
+  return [size, it.uploaderName, `${time} 上传`].filter(Boolean).join(' · ');
+}
+
+/** 能否在线预览：在线文档一律可预览；文件看后端给的 previewKind（3D 等不可预览 → 直接下载） */
+function canPreview(it: any): boolean {
+  if (it.kind === 'doc') return true;
+  return !!it.previewKind && it.previewKind !== 'none';
 }
 
 function previewDoc(it: any) {
+  // 不可预览的文件（3D 模型等）点文件名直接下载
+  if (!canPreview(it)) {
+    downloadDocFile(it);
+    return;
+  }
   docPreviewItem.value = {
     kind: it.kind,
     id: it.id,
@@ -2288,26 +2342,29 @@ async function downloadDocFile(it: any) {
   }
 }
 
-/** 上传本周文档：逐个上传并统一打「周报文档」类型（自动归当前 ISO 周） */
-async function onWeekFilesPicked(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  input.value = '';
+/** 上传文件：weekOnly=true 走「上传周报文档」（统一打周报文档类型，自动归当前 ISO 周）；
+ *  普通上传带工具栏选的类型标签（可空=未分类）；3D 打印格式未手选类型时自动打「3D 模型」 */
+async function onFilesPicked(weekOnly: boolean) {
+  const input = (weekOnly ? weekFileInput : fileUploadInput).value as HTMLInputElement | null;
+  const files = Array.from(input?.files ?? []);
+  if (input) input.value = '';
   if (!files.length || !project.value) return;
   weekUploading.value = true;
   let ok = 0;
   try {
     for (const f of files) {
+      const docType = weekOnly
+        ? WEEK_DOC_TYPE
+        : uploadDocType.value.trim() || (is3DFile(f.name) ? DOC_TYPE_3D : '');
       try {
-        await documentsApi.upload(f, { scope: 'project', targetId: project.value.id, docType: WEEK_DOC_TYPE });
+        await documentsApi.upload(f, { scope: 'project', targetId: project.value.id, docType: docType || undefined });
         ok += 1;
       } catch (e: any) {
         ElMessage.warning(`「${f.name}」上传失败：${e?.response?.data?.message || '未知错误'}`);
       }
     }
     if (ok) {
-      ElMessage.success(`已上传 ${ok} 个文档，归入本周（${currentWeekKey.value}）`);
-      docTab.value = 'week';
+      ElMessage.success(weekOnly ? `已上传 ${ok} 个周报文档，归入本周（${currentWeekKey.value}）` : `已上传 ${ok} 个文件`);
       await loadDocCenter();
     }
   } finally {
@@ -2315,9 +2372,70 @@ async function onWeekFilesPicked(e: Event) {
   }
 }
 
-/** 从周报页跳到文档中心并选中「周报文档」分类 */
+/** 替换文件：同名重新上传 → 服务端生成新版本（项目文件不可删除，替换是唯一更正方式） */
+function startReplace(it: any) {
+  replaceTarget.value = it;
+  replaceFileInput.value?.click();
+}
+
+async function onReplacePicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = '';
+  const target = replaceTarget.value;
+  if (!files.length || !target || !project.value) return;
+  weekUploading.value = true;
+  try {
+    for (const f of files) {
+      try {
+        await documentsApi.upload(f, {
+          scope: 'project',
+          targetId: project.value.id,
+          docType: target.docType || undefined,
+          conflict: 'version',
+        });
+        ElMessage.success(`「${target.name}」已替换为新版本`);
+      } catch (e: any) {
+        ElMessage.warning(`替换失败：${e?.response?.data?.message || '未知错误'}`);
+      }
+    }
+    await loadDocCenter();
+  } finally {
+    weekUploading.value = false;
+    replaceTarget.value = null;
+  }
+}
+
+/** 类型标签：点击小标签修改（预设可选 + 手动输入） */
+function openTypeEdit(it: any) {
+  typeEditTarget.value = it;
+  typeEditValue.value = it.docType || '';
+  typeEditVisible.value = true;
+}
+
+async function saveTypeEdit() {
+  const target = typeEditTarget.value;
+  if (!target) return;
+  const val = (typeEditValue.value || '').trim();
+  if (val.length > 12) {
+    ElMessage.warning('自定义类型最长 12 字');
+    return;
+  }
+  typeSaving.value = true;
+  try {
+    await documentsApi.patchFile(target.id, { docType: val || null });
+    ElMessage.success(val ? `类型已设为「${val}」` : '已清除类型标签');
+    typeEditVisible.value = false;
+    await loadDocCenter();
+  } catch (e: any) {
+    ElMessage.warning(e?.response?.data?.message || '类型保存失败');
+  } finally {
+    typeSaving.value = false;
+  }
+}
+
+/** 从周报页跳到文件页上传 */
 function goDocCenter() {
-  docTab.value = 'week';
   activeTab.value = 'docs';
 }
 
@@ -3666,6 +3784,14 @@ const infoOpen = ref(false);
 .doc-badge.b-file {
   background: #f4f5f7;
   color: #6b7280;
+}
+.doc-badge.b-threed {
+  background: #e6f1fb;
+  color: #185fa5;
+}
+.doc-type-tag {
+  flex: 0 0 auto;
+  cursor: pointer;
 }
 .doc-week-tag {
   flex: 0 0 auto;
