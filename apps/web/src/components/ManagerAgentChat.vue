@@ -393,7 +393,7 @@ const curBot = computed(() => bots.value.find((b) => b.key === botKey.value));
 
 /** 专属机器人各自的常驻快捷问 */
 const BOT_CHIPS: Record<string, string[]> = {
-  booking: ['书书老师这周什么时候有空？', '帮我约杨老师明天上午聊 30 分钟', '查我约老师的进度', '这周我（本人）的安排'],
+  booking: ['约杨老师', '约书书老师', '查我约的进度'],
 };
 
 /** 每个机器人各记各的活动会话指针（万能管家沿用旧 key，老用户的接续不受影响） */
