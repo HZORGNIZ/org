@@ -75,6 +75,7 @@ const ACTION_KINDS = new Set([
   'WORK_SCHEDULE_SET',
   'DAILY_CHASE',
   'RISK_ALERT',
+  'BOOKING_SLOT_PICK',
   'BOOKING_CREATE',
   'TIME_SLOT_SET',
   'BOOKING_DECIDE',
@@ -134,7 +135,7 @@ export const AGENT_BOTS: AgentBotDef[] = [
     ownerName: undefined,
     prompt: 'manager.bot.schedule',
     tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
-    actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
+    actions: new Set(['BOOKING_SLOT_PICK', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
   },
 ];
 
@@ -2274,6 +2275,8 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
           return await this.planDailyChase(me, scope, action);
         case 'RISK_ALERT':
           return await this.planRiskAlert(me, scope, action);
+        case 'BOOKING_SLOT_PICK':
+          return await this.planBookingSlotPick(me, bot, action);
         case 'BOOKING_CREATE':
           return await this.planBookingCreate(me, bot, action);
         case 'TIME_SLOT_SET':
@@ -3762,6 +3765,28 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
   private static readonly MAX_SESSIONS_PER_USER = 50;
 
   // ---- 约时间动作计划 ----
+
+  /** 可约时段点选卡：把老师真实空档整理成可点击按钮（不写库）；用户点选一个时段 → 下一轮出 BOOKING_CREATE 确认卡 */
+  private async planBookingSlotPick(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
+    const owner = await this.resolveBotOwner(bot);
+    if (!owner) return { kind: 'BOOKING_SLOT_PICK', needClarify: 'owner', reason: `被约人「${bot?.ownerName ?? ''}」账号还没绑定或已停用，暂时不能预约，请联系管理员` };
+    if (owner.id === me.id) {
+      return { kind: 'BOOKING_SLOT_PICK', needClarify: 'self', reason: '你是被约老师本人，不用预约自己；想登记可约时间直接说「周三下午2点后有空」' };
+    }
+    const slots = Array.from(
+      new Set((Array.isArray(action?.slots) ? action.slots : []).map((s: any) => String(s ?? '').trim()).filter(Boolean)),
+    ).slice(0, 6);
+    if (!slots.length) {
+      return { kind: 'BOOKING_SLOT_PICK', needClarify: 'slots', reason: '时段列表是空的：先用 owner_availability 查到老师的真实空档，再把 2-4 个候选时段写进 slots' };
+    }
+    return {
+      kind: 'BOOKING_SLOT_PICK',
+      label: `选择${owner.name}老师的可约时段`,
+      ownerName: owner.name,
+      slots,
+      hint: '点一个时段，我按它生成预约确认卡；也可以直接打字说另一个时间',
+    };
+  }
 
   private async planBookingCreate(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
     const owner = await this.resolveBotOwner(bot);

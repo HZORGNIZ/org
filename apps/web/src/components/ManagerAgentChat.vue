@@ -180,7 +180,19 @@
               <div v-for="(row, ri) in actionRows(m.action)" :key="ri" class="agent-action-row">
                 <span class="agent-action-k">{{ row.k }}</span><span class="agent-action-v">{{ row.v }}</span>
               </div>
-              <div class="agent-action-ops">
+              <!-- 可约时段点选卡：点按钮即把选择作为新消息发出，模型下一轮出 BOOKING_CREATE 确认卡 -->
+              <div v-if="m.action.kind === 'BOOKING_SLOT_PICK'" class="agent-slot-pick">
+                <el-button
+                  v-for="(s, si) in m.action.slots"
+                  :key="si"
+                  size="small"
+                  type="primary"
+                  plain
+                  @click="pickSlot(m, s)"
+                >🕐 {{ s }}</el-button>
+                <div class="agent-clarify-tip">{{ m.action.hint || '点一个时段，我按它生成预约确认卡；也可以直接打字说另一个时间' }}</div>
+              </div>
+              <div v-else class="agent-action-ops">
                 <el-button size="small" type="primary" :loading="m.action.running" @click="confirmAction(m)">确认执行</el-button>
                 <el-button size="small" text @click="cancelAction(m)">取消</el-button>
               </div>
@@ -330,6 +342,7 @@ const ACTION_TITLES: Record<string, string> = {
   WORK_SCHEDULE_SET: '设置我的工作/培训时间安排',
   DAILY_CHASE: '催今日日报（分群点名＋站内提醒）',
   RISK_ALERT: '风险项目提醒对应负责人',
+  BOOKING_SLOT_PICK: '选择老师的可约时段（点一个时段，我来出预约确认卡）',
   BOOKING_CREATE: '发起沟通预约（确认后通知老师，并推送到项目PUSH群）',
   TIME_SLOT_SET: '登记临时可约/不可约时段',
   BOOKING_DECIDE: '审批沟通预约（结果通知对方并推送到项目PUSH群）',
@@ -779,6 +792,14 @@ function fillDraft(text: string) {
     const ta: HTMLTextAreaElement | undefined = inst?.textarea;
     if (ta) ta.selectionStart = ta.selectionEnd = ta.value.length;
   });
+}
+
+/** 可约时段点选：点击即把所选时段作为新消息发出（模型下一轮出 BOOKING_CREATE 确认卡）；卡片标记已处理防重复点 */
+function pickSlot(m: AgentMsg, slot: string) {
+  if (sending.value || m.decided) return;
+  m.decided = 'done';
+  m.resultLabel = '已选择时段：' + slot;
+  send('我选这个时段：' + slot);
 }
 
 async function send(preset?: string) {
@@ -1406,6 +1427,8 @@ defineExpose({ checkConfig, start });
 .agent-clarify-hours { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .agent-clarify-tip { font-size: 11px; color: #909399; }
 .agent-action-ops { margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end; }
+.agent-slot-pick { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.agent-slot-pick .agent-clarify-tip { width: 100%; }
 .agent-action-done { font-size: 12px; color: #67c23a; background: #f0f9eb; border-radius: 8px; padding: 6px 10px; }
 .agent-done-link { color: #428bff; margin-left: 8px; text-decoration: none; font-weight: 600; }
 .agent-action-cancelled { color: #909399; background: #f4f4f5; }
