@@ -172,6 +172,11 @@ function detectBookingOwner(text: string): string | null {
   return null;
 }
 
+/** 明确想约老师/问老师空档的意图（配合 detectBookingOwner：提到老师名 + 约/预约/有空语义才切换） */
+const BOOKING_INTENT_RE = /约(一?下|个|时间)?[，、必得能要先]?|预约|什么时候(有)?空|有空吗|空档/;
+/** 误伤护栏：提到老师但「约」是别的意思（约稿/合约/条约/特约等）不切约时间流程 */
+const BOOKING_NEGATIVE_RE = /约稿|合约|条约|特约|签署|签.{0,3}合同/;
+
 /** 当前档位可见的机器人清单（config 返回给前端渲染头像栏）；scheduleOwner=约时间机器人绑定的老师名 */
 function botsForTier(tier: string) {
   return AGENT_BOTS.filter((b) => !b.managersOnly || tier === 'manager').map((b) => ({
@@ -371,12 +376,17 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 合并版约时间：从本次消息与历史里识别要约哪位老师；老师本人没提名字时自动绑定自己（用 bot 管自己的可约时间/审批预约）
+    // 「我的助理」里说「帮我约杨老师…」也直接切到约时间流程（不用让用户手动换机器人）；提到老师但「约」是别的意思（约稿/合约）不切
     let botRun = bot;
+    const joinedText = flat.map((m) => m.content).join('\n');
     if (bot.key === 'booking') {
       const ownerTarget =
-        detectBookingOwner(flat.map((m) => m.content).join('\n')) ??
+        detectBookingOwner(joinedText) ??
         (/(书书|舒舒)/.test(me.name) ? '书书' : /(杨力|杨老师|杨丽)/.test(me.name) ? '杨力' : null);
       if (ownerTarget) botRun = { ...bot, ownerName: ownerTarget };
+    } else if (detectBookingOwner(joinedText) && BOOKING_INTENT_RE.test(joinedText) && !BOOKING_NEGATIVE_RE.test(joinedText)) {
+      const bookingBot = AGENT_BOTS.find((b) => b.key === 'booking')!;
+      botRun = { ...bookingBot, ownerName: detectBookingOwner(joinedText)! };
     }
 
     const scope: any = await this.buildScope(me, tier);
@@ -420,11 +430,12 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
           : '（当前未解析到公司群，只能发项目群）'
       }；我的未发布/待召开会议=${JSON.stringify(scope.meetings)}`,
       // 专属机器人：能力边界写进上下文，模型不越界承诺；工具/动作白名单另在 runTool/buildAction 硬拦截
-      bot.key !== 'assistant'
-        ? `【当前专属机器人】${bot.name}（${bot.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切回「我的助理」，绝不承诺自己做不到的事。`
+      // （botRun 可能已从「我的助理」动态切换成约时间流程，判断与文案都用 botRun）
+      botRun.key !== 'assistant'
+        ? `【当前专属机器人】${botRun.name}（${botRun.desc}）。你只能扮演它：只允许用它的工具与动作，用户提超出范围的需求时简短说明并建议切回「我的助理」，绝不承诺自己做不到的事。`
         : '',
       // 约时间机器人（合并版）：botRun 带动态识别的被约老师；没识别到时上下文会指导模型先问约谁
-      bot.key === 'booking' ? await this.buildScheduleBotContext(me, botRun) : '',
+      botRun.key === 'booking' ? await this.buildScheduleBotContext(me, botRun) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -443,7 +454,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         reply?: string;
         action?: any;
       }>(
-        bot.prompt,
+        botRun.prompt,
         { contextNote: ctxBlock },
         { extraMessages, temperature: 0.2 },
       );
