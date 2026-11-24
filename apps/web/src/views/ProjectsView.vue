@@ -8,20 +8,20 @@
     </div>
 
     <div class="view-tabs">
-      <el-radio-group v-model="viewMode" size="small" @change="load">
+      <el-radio-group v-model="viewMode" size="small" @change="onViewChange">
         <el-radio-button value="active">进行中</el-radio-button>
         <el-radio-button v-if="pendingCount > 0" value="pending">待我审批（{{ pendingCount }}）</el-radio-button>
         <el-radio-button v-if="myAppCount > 0" value="mine">我的申请（{{ myAppCount }}）</el-radio-button>
         <el-radio-button value="archived">已存档（{{ archivedCount }}）</el-radio-button>
         <el-radio-button v-if="auth.isAdmin" value="trash">回收站</el-radio-button>
       </el-radio-group>
-    </div>
-
-    <div v-if="departments.length" class="dept-filter">
-      <el-select v-model="deptFilter" placeholder="全部部门" clearable size="small" style="width: 180px">
-        <el-option label="全部部门" value="" />
-        <el-option v-for="d in departments" :key="d.id" :label="d.name" :value="d.id" />
-      </el-select>
+      <!-- 全局模糊搜索：项目名 / 描述 / 部门名 / 成员姓名（前端内存过滤） -->
+      <el-input v-model="searchKw" class="proj-search" size="small" clearable :prefix-icon="Search" placeholder="搜索项目名 / 描述 / 成员姓名…" />
+      <!-- 紧凑（默认，快速扫视）/ 详细（完整卡片，保留进展拖拽合并）双模式，偏好存 localStorage -->
+      <el-radio-group v-if="viewMode === 'active'" :model-value="compactMode" size="small" class="mode-toggle" @change="(v: any) => setCompact(!!v)">
+        <el-radio-button :value="true">紧凑</el-radio-button>
+        <el-radio-button :value="false">详细</el-radio-button>
+      </el-radio-group>
     </div>
 
     <!-- 顶部轻量统计：进行中视图展示（只统计当前成员可见的项目） -->
@@ -34,7 +34,22 @@
       <span class="ps-item"><b>{{ totalMembers }}</b> 名成员</span>
     </div>
 
-    <div v-loading="loading" class="grid">
+    <!-- 左右两栏：左侧部门导航（sticky，替代原部门下拉），右侧项目卡片网格 -->
+    <div class="board">
+      <aside v-if="showSide && sideItems.length > 1" class="dept-side">
+        <div
+          v-for="it in sideItems"
+          :key="it.key"
+          class="ds-item"
+          :class="{ on: !searching && sideFilter === it.key }"
+          :title="`${it.name}（${it.count} 个项目）`"
+          @click="pickSide(it.key)"
+        >
+          <span class="ds-name ellipsis">{{ it.name }}</span>
+          <span class="ds-count">{{ it.count }}</span>
+        </div>
+      </aside>
+      <div v-loading="loading" class="grid" :class="{ compact: viewMode === 'active' && compactMode }">
       <!-- 项目列表统一按部门归类：每行一组（组头占满整行栅格），项目归入其「主部门」（组织架构里排最前的关联部门），
            未关联任何部门的归入「未归类」沉底；回收站为管理视图，保持平铺不再分组 -->
       <template v-for="g in displayGroups" :key="g.title || '_all'">
@@ -60,6 +75,8 @@
           <span>{{ p.owner?.name }}</span>
           <span v-if="viewMode === 'active' && p.lastActivityAt">· 更新于 {{ relDate(p.lastActivityAt) }}</span>
         </div>
+        <!-- 搜索命中原因小标签（项目名/描述/部门/成员 张三） -->
+        <div v-if="searching && searchHits.get(p.id)" class="proj-hit">{{ searchHits.get(p.id) }}</div>
         <!-- 最新一条项目纪要（点击跳详情页纪要区）；无纪要时灰显提示 -->
         <div v-if="viewMode === 'active' && p.latestNote" class="proj-note" :title="`最新纪要：${p.latestNote.title}（${noteLabel(p.latestNote.kind)}，${p.latestNote.authorName || ''} 发布）`">
           <el-tag size="small" :type="noteTag(p.latestNote.kind)" effect="light">{{ noteLabel(p.latestNote.kind) }}</el-tag>
@@ -116,6 +133,8 @@
       </div>
       </template>
       <div v-if="!projects.length && !loading" class="muted empty">{{ viewMode === 'archived' ? '没有已存档的项目' : viewMode === 'trash' ? '回收站为空' : '还没有项目，点击右上角创建' }}</div>
+      <div v-else-if="loading === false && projects.length && !listTotal" class="muted empty">{{ searching ? '无匹配项目，换个关键词试试' : '该部门下暂无项目' }}</div>
+      </div>
     </div>
 
     <!-- 新建项目 -->
@@ -216,6 +235,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Search } from '@element-plus/icons-vue';
 import { projectsApi, departmentsApi, documentsApi } from '../api';
 import { useAuthStore } from '../stores/auth';
 import { isUpdateToday, updateDate } from '../utils/format';
@@ -227,7 +247,12 @@ const auth = useAuthStore();
 const projects = ref<any[]>([]);
 const loading = ref(false);
 const departments = ref<any[]>([]);
-const deptFilter = ref('');
+// 左侧部门导航选中（按主部门名过滤，'' = 全部；搜索生效时忽略）
+const sideFilter = ref('');
+// 全局模糊搜索关键词：项目名 / 描述 / 部门名 / 成员姓名
+const searchKw = ref('');
+// 紧凑模式（active 视图默认开启，偏好持久化）
+const compactMode = ref(localStorage.getItem('projects-compact') !== '0');
 // 视图：进行中 / 待我审批 / 我的申请 / 已存档 / 回收站（后三者均不显示在首页与进行中列表）
 const viewMode = ref<'active' | 'pending' | 'mine' | 'archived' | 'trash'>('active');
 const archivedCount = ref(0);
@@ -256,12 +281,33 @@ const createForm = reactive({
 const reqDocFiles = ref<File[]>([]);
 const reqDocInputRef = ref<HTMLInputElement | null>(null);
 
-/** 按主要关联部门筛选后的项目 */
-const shownProjects = computed(() =>
-  deptFilter.value
-    ? projects.value.filter((p) => (p.departments || []).some((d: any) => d.id === deptFilter.value))
-    : projects.value,
-);
+/** 参与筛选的底表：搜索生效时只保留命中的项目（跨部门），否则全量 */
+const searching = computed(() => searchKw.value.trim().length > 0);
+
+/** 搜索命中原因表（projectId → 命中原因文案），卡片上标注便于确认为什么被搜出 */
+const searchHits = computed(() => {
+  const kw = searchKw.value.trim().toLowerCase();
+  const m = new Map<string, string>();
+  if (!kw) return m;
+  for (const p of projects.value) {
+    const hits: string[] = [];
+    if ((p.name || '').toLowerCase().includes(kw)) hits.push('项目名');
+    if ((p.description || '').toLowerCase().includes(kw)) hits.push('描述');
+    const deptNames: string[] = (p.departments || []).map((d: any) => d?.name || '');
+    if (deptNames.some((n) => n.toLowerCase().includes(kw))) hits.push('部门');
+    const names = (p.members || []).map((mm: any) => mm?.user?.name || '').filter(Boolean);
+    const hitMembers = names.filter((n: string) => n.toLowerCase().includes(kw));
+    if (hitMembers.length) hits.push(`成员 ${hitMembers.join('、')}`);
+    if (hits.length) m.set(p.id, hits.join(' · '));
+  }
+  return m;
+});
+
+/** 视图底表：以前按部门下拉（deptFilter by id）筛，现由左侧导航/搜索接管，直接取全量 */
+const shownProjects = computed(() => projects.value);
+
+/** 左侧部门导航显示条件：进行中 / 已存档（pending/mine 少量平铺，trash 为管理视图不分组） */
+const showSide = computed(() => viewMode.value === 'active' || viewMode.value === 'archived');
 
 // ---- 项目列表统一按部门归类（部门顺序沿用组织架构：sortOrder → createdAt） ----
 /** 展示分组：按「主部门」把项目归到唯一一组（多部门项目只出现在主部门组，避免同一张卡片重复）；
@@ -301,12 +347,13 @@ function relDate(s?: string): string {
 }
 
 const displayGroups = computed(() => {
-  if (viewMode.value === 'trash') return [{ title: '', projects: shownProjects.value }];
+  const base = searching.value ? shownProjects.value.filter((p) => searchHits.value.has(p.id)) : shownProjects.value;
+  if (viewMode.value === 'trash') return [{ title: '', projects: base }];
   const order: string[] = departments.value.map((d) => d.name).filter(Boolean);
   const rank = new Map(order.map((n, i) => [n, i]));
   const buckets = new Map<string, any[]>();
   const unclassified: any[] = [];
-  for (const p of shownProjects.value) {
+  for (const p of base) {
     const names: string[] = (p.departments || []).map((d: any) => d.name).filter(Boolean);
     if (!names.length) {
       unclassified.push(p);
@@ -325,8 +372,66 @@ const displayGroups = computed(() => {
   }
   const groups = order.filter((n) => buckets.get(n)?.length).map((n) => ({ title: n, projects: buckets.get(n)! }));
   if (unclassified.length) groups.push({ title: '未归类', projects: unclassified });
+  // 左侧导航单选部门：只保留选中组（搜索生效时忽略，跨部门展示命中项）
+  if (!searching.value && sideFilter.value) return groups.filter((g) => g.title === sideFilter.value);
   return groups;
 });
+
+/** 左侧导航数据源：基于「未过滤」的完整分组（否则选中某部门后其余项计数会消失） */
+const allGroups = computed(() => {
+  if (viewMode.value === 'trash') return [{ title: '', projects: shownProjects.value }];
+  const order: string[] = departments.value.map((d) => d.name).filter(Boolean);
+  const rank = new Map(order.map((n, i) => [n, i]));
+  const buckets = new Map<string, any[]>();
+  const unclassified: any[] = [];
+  for (const p of shownProjects.value) {
+    const names: string[] = (p.departments || []).map((d: any) => d.name).filter(Boolean);
+    if (!names.length) {
+      unclassified.push(p);
+      continue;
+    }
+    const primary = names.reduce((best, n) => ((rank.get(n) ?? Number.MAX_SAFE_INTEGER) < (rank.get(best) ?? Number.MAX_SAFE_INTEGER) ? n : best), names[0]);
+    if (!buckets.has(primary)) {
+      buckets.set(primary, []);
+      if (!rank.has(primary)) {
+        rank.set(primary, order.length);
+        order.push(primary);
+      }
+    }
+    buckets.get(primary)!.push(p);
+  }
+  const groups = order.filter((n) => buckets.get(n)?.length).map((n) => ({ title: n, projects: buckets.get(n)! }));
+  if (unclassified.length) groups.push({ title: '未归类', projects: unclassified });
+  return groups;
+});
+
+/** 左侧导航项：全部 + 各部门 + 未归类，带项目数徽标 */
+const sideItems = computed(() => {
+  const items: { key: string; name: string; count: number }[] = [{ key: '', name: '全部', count: shownProjects.value.length }];
+  for (const g of allGroups.value) if (g.title) items.push({ key: g.title, name: g.title, count: g.projects.length });
+  return items;
+});
+
+/** 当前可见项目总数（搜索/部门过滤后的空态判断） */
+const listTotal = computed(() => displayGroups.value.reduce((s, g) => s + g.projects.length, 0));
+
+/** 点击左侧导航项：选中或取消；有搜索词时点击先清空搜索 */
+function pickSide(key: string) {
+  if (searching.value) searchKw.value = '';
+  sideFilter.value = sideFilter.value === key ? '' : key;
+}
+
+/** 紧凑模式切换并持久化（详细模式保留完整卡片与进展拖拽合并） */
+function setCompact(v: boolean) {
+  compactMode.value = v;
+  localStorage.setItem('projects-compact', v ? '1' : '0');
+}
+
+/** 切视图：重置部门选中（搜索词保留），再拉数据 */
+function onViewChange() {
+  sideFilter.value = '';
+  load();
+}
 
 async function load() {
   loading.value = true;
@@ -616,9 +721,116 @@ onMounted(async () => {
 
 <style scoped>
 .grid {
+  flex: 1;
+  min-width: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
+}
+/* 左右两栏：左侧 sticky 部门导航 + 右侧卡片网格（<900px 降级为顶部横向 chip 条） */
+.board {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.dept-side {
+  width: 132px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+.ds-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+}
+.ds-item:hover {
+  background: var(--el-fill-color-light);
+}
+.ds-item.on {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+.ds-name {
+  min-width: 0;
+}
+.ds-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 7px;
+  border-radius: 9px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color);
+}
+.ds-item.on .ds-count {
+  color: var(--el-color-primary);
+  background: #fff;
+}
+/* 搜索框：占 view-tabs 剩余空间 */
+.proj-search {
+  width: 240px;
+  margin-left: auto;
+}
+/* 搜索命中原因小标签 */
+.proj-hit {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+/* 紧凑模式：小卡片快速扫视——隐藏描述/部门行/进展列表，保留名称+标签+meta+最新纪要 */
+.grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.grid.compact .project-card {
+  padding: 12px 14px;
+}
+.grid.compact .proj-name {
+  font-size: 14px;
+}
+.grid.compact .proj-desc,
+.grid.compact .proj-dept,
+.grid.compact .upd-list,
+.grid.compact .upd-empty {
+  display: none;
+}
+@media (max-width: 900px) {
+  .board {
+    flex-direction: column;
+  }
+  .dept-side {
+    position: static;
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 6px;
+  }
+  .ds-item {
+    flex-shrink: 0;
+  }
+  .proj-search {
+    width: 100%;
+    margin-left: 0;
+    order: 10;
+  }
 }
 .project-card {
   background: #fff;
@@ -645,9 +857,6 @@ onMounted(async () => {
 .proj-name {
   font-size: var(--fs-lg);
   font-weight: 600;
-}
-.dept-filter {
-  margin-bottom: 12px;
 }
 /* 顶部轻量统计条：项目总数 + 按部门分布 + 任务/成员总数 */
 .proj-stats {

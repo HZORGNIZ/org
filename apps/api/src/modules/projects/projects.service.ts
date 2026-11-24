@@ -179,7 +179,8 @@ export class ProjectsService {
       include: {
         owner: { select: { id: true, name: true } },
         departments: { select: { department: { select: { id: true, name: true } } } },
-        members: { select: { userId: true, role: true } },
+        // 带上成员姓名：项目管理页顶部搜索按成员名模糊匹配项目用（无姓名则前端搜不了人）
+        members: { select: { userId: true, role: true, user: { select: { id: true, name: true } } } },
         _count: { select: { tasks: true, members: true } },
         // 项目管理页统计：最新一条纪要（标题+类型+发布时间+发布人），用于卡片「最新进展」展示
         notes: {
