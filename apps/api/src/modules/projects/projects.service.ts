@@ -11,9 +11,11 @@ import { deptAuthorityIds, deptOfProjectAuthority, ledDeptWhere } from '../../co
 import { isSelfDigestMessage } from '../../common/self-digest';
 import { writeAccessLog } from '../../common/access-log';
 import { CN_OFFSET_MS, beijingMondayOf, beijingMondayDate, isoWeekOf, cnWeekLabel } from '../../common/beijing-time';
+import { rankExcludedUserIds } from '../../common/rank-exclude';
 import { AiService } from '../ai/ai.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DingtalkFetchService } from '../integrations/dingtalk-fetch.service';
+import { DingtalkDmService } from '../integrations/dingtalk-dm.service';
 import { DailyDigestService } from '../integrations/daily-digest.service';
 import { ProgressQueue } from './progress-queue.service';
 
@@ -38,6 +40,9 @@ export interface ProjectCreatePayload {
 
 /** 合法纪要类型（PROGRESS=项目进度 / REPORT=汇报内容 / NOTE=项目备注）；前端 chips 与此保持一致 */
 const NOTE_KINDS = ['PROGRESS', 'REPORT', 'NOTE'];
+
+/** BOSS 归口项目名：杨力/书书（rankExcludedUserIds 名单）的日报/周报仅在此项目展示，其他项目视图一律过滤 */
+const BOSS_PROJECT_NAME = '项目push';
 
 /** 保密协议默认正文（首次使用时落为 v1；管理员可在系统设置里改写，改写即升版本号） */
 const NDA_DEFAULT = `# 项目保密协议
@@ -77,6 +82,7 @@ export class ProjectsService {
     private ai: AiService,
     private notifications: NotificationsService,
     private fetch: DingtalkFetchService,
+    private dm: DingtalkDmService,
     private progressQueue: ProgressQueue,
     private digest: DailyDigestService,
   ) {}
@@ -124,6 +130,18 @@ export class ProjectsService {
     return p;
   }
 
+  /**
+   * BOSS 归口：杨力/书书（rankExcludedUserIds 名单）的周报仅在「项目push」项目展示。
+   * 返回过滤后的成员 id 列表——目标项目是项目push时原样返回，其他项目剔除 BOSS。
+   */
+  private async filterBossMembers(memberIds: string[], projectId: string): Promise<string[]> {
+    const push = await this.prisma.project.findFirst({ where: { name: BOSS_PROJECT_NAME, archived: false }, select: { id: true } });
+    if (push && push.id === projectId) return memberIds;
+    const bossIds = await rankExcludedUserIds(this.prisma);
+    if (!bossIds.size) return memberIds;
+    return memberIds.filter((id) => !bossIds.has(id));
+  }
+
   /** 立项确认强制项：里程碑与需求文档默认必填，只有创建人显式勾选「确定不需要」才豁免 */
   private assertKickoffConfirmations(opts: {
     milestoneCount: number;
@@ -162,7 +180,13 @@ export class ProjectsService {
         owner: { select: { id: true, name: true } },
         departments: { select: { department: { select: { id: true, name: true } } } },
         members: { select: { userId: true, role: true } },
-        _count: { select: { tasks: true } },
+        _count: { select: { tasks: true, members: true } },
+        // 项目管理页统计：最新一条纪要（标题+类型+发布时间+发布人），用于卡片「最新进展」展示
+        notes: {
+          orderBy: { publishedAt: 'desc' },
+          take: 1,
+          select: { kind: true, title: true, publishedAt: true, createdBy: { select: { name: true } } },
+        },
         // 项目页与首页一致：按进展事件消息时间倒序取最近 6 条（条目式逐行展示）
         updates: {
           orderBy: { periodEnd: 'desc' },
@@ -186,6 +210,17 @@ export class ProjectsService {
     const signedSet = await this.signedNdaIds(userId, confIds);
     return projects.map((raw) => {
       const p = this.flatten(raw);
+      // 项目管理页统计：成员数 / 最新纪要 / 最近活跃（纪要与最新一条进展的时间较大者）
+      const latestNote = raw.notes?.[0] ?? null;
+      (p as any).memberCount = raw._count?.members ?? (raw.members?.length ?? 0);
+      (p as any).latestNote = latestNote
+        ? { kind: latestNote.kind, title: latestNote.title, publishedAt: latestNote.publishedAt, authorName: latestNote.createdBy?.name ?? null }
+        : null;
+      const times: number[] = [];
+      if (latestNote?.publishedAt) times.push(new Date(latestNote.publishedAt).getTime());
+      const lastUpdate = raw.updates?.[0];
+      if (lastUpdate?.createdAt) times.push(new Date(lastUpdate.createdAt).getTime());
+      (p as any).lastActivityAt = times.length ? new Date(Math.max(...times)) : null;
       if (raw.confidential) {
         // 系统管理员不签协议也照常可见（批复：管理员照常可见，只留痕）
         p.ndaSigned = role === Role.ADMIN || signedSet.has(raw.id);
@@ -624,6 +659,31 @@ export class ProjectsService {
       notified = targets.length;
     } catch (e) {
       this.logger.warn(`纪要站内信发送失败 note=${note.id}: ${(e as Error).message}`);
+    }
+    // 纪要同步项目钉钉群：项目已关联群才推（纯文本卡片排版）；失败静默不影响发布；编辑不重推（避免刷群）
+    try {
+      const proj = await this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { dingtalkConversationId: true, dingtalkGroupName: true, confidential: true },
+      });
+      const authorName = (note as any).createdBy?.name ?? '';
+      if (proj?.dingtalkConversationId && !proj.confidential) {
+        const digest = content.replace(/\s+/g, ' ').trim().slice(0, 300);
+        const text = [
+          `📋《${projectName}》项目纪要 · ${kindLabel}`,
+          `标题：${title}`,
+          authorName ? `发布人：${authorName}` : '',
+          digest.length < content.replace(/\s+/g, ' ').trim().length ? `正文：${digest}…` : `正文：${digest}`,
+          `—— 详情请进 hzai.work 项目页「项目纪要」查看`,
+        ]
+          .filter(Boolean)
+          .join('\n');
+        const r = await this.dm.sendGroup(proj.dingtalkConversationId, text);
+        if (r.ok) this.logger.log(`纪要 note=${note.id} 已同步到项目群「${proj.dingtalkGroupName ?? ''}」`);
+        else this.logger.warn(`纪要同步项目群失败 note=${note.id}: ${r.error}`);
+      }
+    } catch (e) {
+      this.logger.warn(`纪要同步项目群异常 note=${note.id}: ${(e as Error).message}`);
     }
     return { ok: true, notified, note: this.flatNote(note, userId, role === Role.ADMIN) };
   }
@@ -1912,15 +1972,17 @@ export class ProjectsService {
 
     // 成员 = 项目成员 ∪ 负责人（去重）
     const memberIds = [...new Set([project.ownerId, ...project.members.map((m) => m.userId)])];
+    // BOSS 归口：杨力/书书的周报仅在「项目push」项目展示，其他项目视图整条过滤（名单复用排行排除口径）
+    const visibleMemberIds = await this.filterBossMembers(memberIds, projectId);
     const users = await this.prisma.user.findMany({
-      where: { id: { in: memberIds } },
+      where: { id: { in: visibleMemberIds } },
       select: { id: true, name: true, avatar: true, departmentId: true, department: { select: { name: true } } },
     });
     // 关联部门管理者（负责人 + 共管人）：userId -> { deptName, sortOrder }（同一人管多个关联部门时取 sortOrder 最小者代表其档位）
     const deptLeaders = new Map<string, { deptName: string; sortOrder: number }>();
     for (const pd of project.departments.map((x) => x.department).filter(Boolean)) {
       for (const aid of deptAuthorityIds(pd)) {
-        if (!memberIds.includes(aid)) continue;
+        if (!visibleMemberIds.includes(aid)) continue;
         const cur = deptLeaders.get(aid);
         if (!cur || pd.sortOrder < cur.sortOrder) deptLeaders.set(aid, { deptName: pd.name, sortOrder: pd.sortOrder });
       }
@@ -1928,7 +1990,7 @@ export class ProjectsService {
 
     // 本周周报一次批量取（一人一周可多份：项目/部门/个人），按人择一：优先本项目归属，其次个人周报
     const reports = await this.prisma.report.findMany({
-      where: { type: 'WEEKLY', ownerId: { in: memberIds }, periodStart: monday },
+      where: { type: 'WEEKLY', ownerId: { in: visibleMemberIds }, periodStart: monday },
     });
     const picked = this.selectProjectWeekly(reports, projectId);
 
@@ -2019,19 +2081,21 @@ export class ProjectsService {
     }
 
     const memberIds = [...new Set([project.ownerId, ...project.members.map((m) => m.userId)])];
+    // BOSS 归口：AI 总结同样只汇总可见成员（与 projectWeeklyReport 同口径）
+    const visibleMemberIds = await this.filterBossMembers(memberIds, projectId);
     const [users, reports] = await Promise.all([
       this.prisma.user.findMany({
-        where: { id: { in: memberIds } },
+        where: { id: { in: visibleMemberIds } },
         select: { id: true, name: true, department: { select: { name: true } } },
       }),
-      this.prisma.report.findMany({ where: { type: 'WEEKLY', ownerId: { in: memberIds }, periodStart: monday } }),
+      this.prisma.report.findMany({ where: { type: 'WEEKLY', ownerId: { in: visibleMemberIds }, periodStart: monday } }),
     ]);
     const userName = new Map(users.map((u) => [u.id, u]));
     const picked = this.selectProjectWeekly(reports, projectId);
 
     let reportsText = '';
     const missing: string[] = [];
-    for (const id of memberIds) {
+    for (const id of visibleMemberIds) {
       const u = userName.get(id);
       if (!u) continue;
       const dept = u.department?.name ?? '未分组';
@@ -2282,18 +2346,29 @@ export class ProjectsService {
       where: { projectId },
       orderBy: { createdAt: 'asc' },
     });
-    const keeperIds = [...new Set(items.map((i) => i.keeperId).filter(Boolean) as string[])];
-    const keepers = keeperIds.length
-      ? await this.prisma.user.findMany({ where: { id: { in: keeperIds } }, select: { id: true, name: true, avatar: true } })
+    const personIds = [
+      ...new Set(
+        items
+          .flatMap((i) => [i.keeperId, i.updatedById])
+          .filter(Boolean) as string[],
+      ),
+    ];
+    const persons = personIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: personIds } }, select: { id: true, name: true, avatar: true } })
       : [];
-    const byId = new Map(keepers.map((u) => [u.id, u]));
+    const byId = new Map(persons.map((u) => [u.id, u]));
     const feeVisible = role === Role.ADMIN; // 费用仅系统管理员可见，其他角色接口层直接剥离
     return {
       ok: true,
       feeVisible,
       items: items.map((i) => {
         const { fee, ...rest } = i;
-        return { ...rest, keeper: i.keeperId ? byId.get(i.keeperId) ?? null : null, ...(feeVisible ? { fee } : {}) };
+        return {
+          ...rest,
+          keeper: i.keeperId ? byId.get(i.keeperId) ?? null : null,
+          updatedBy: i.updatedById ? byId.get(i.updatedById) ?? null : null,
+          ...(feeVisible ? { fee } : {}),
+        };
       }),
     };
   }
@@ -2313,7 +2388,7 @@ export class ProjectsService {
     if (!project.hasHardware) throw new BadRequestException('本项目未开启硬件资产管理（项目设置 → 硬件资产）');
     if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
     const row = this.normalizeHardware(data, project.ownerId, role === Role.ADMIN);
-    const created = await this.prisma.projectHardware.create({ data: { projectId, ...row } });
+    const created = await this.prisma.projectHardware.create({ data: { projectId, ...row, updatedById: userId } });
     return { ok: true, item: created };
   }
 
@@ -2329,7 +2404,7 @@ export class ProjectsService {
     if (!existing || existing.projectId !== projectId) throw new NotFoundException('硬件条目不存在');
     if (role !== Role.ADMIN) await this.assertCanManage(projectId, userId);
     const row = this.normalizeHardware(data, existing.keeperId, role === Role.ADMIN);
-    const updated = await this.prisma.projectHardware.update({ where: { id: itemId }, data: row });
+    const updated = await this.prisma.projectHardware.update({ where: { id: itemId }, data: { ...row, updatedById: userId } });
     return { ok: true, item: updated };
   }
 

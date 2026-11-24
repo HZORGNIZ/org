@@ -24,6 +24,9 @@ export function weeklyScopeKey(scope?: WeeklyScope | null): string {
   return '';
 }
 
+/** BOSS 归口项目名：杨力/书书（rankExcludedUserIds 名单）的日报/周报仅在此项目展示，其他项目视图一律过滤 */
+const BOSS_PROJECT_NAME = '项目push';
+
 /**
  * 日报工时归一：接受数字或数字字符串，限定 0~24 小时（一天不可能超过 24h）
  * - 0 是合法值：日报必须上报工时，确实没有投入就明确写 0
@@ -184,6 +187,18 @@ export class ReportsService {
    * - 指定部门：该部门在职成员（需为管理员/该部门管理者/该部门自己成员）
    * - 不指定：按登录人可见范围（管理员=全体；负责人=管辖范围；普通成员=本人 ∪ 同部门成员）
    */
+  /**
+   * BOSS 归口：杨力/书书（rankExcludedUserIds 名单）的日报仅在「项目push」项目展示。
+   * 返回需要过滤掉的 BOSS userId 集合——未指定项目 / 目标就是项目push / 名单为空时返回 null（不过滤）。
+   */
+  private async bossExcludeFor(opts: { projectId?: string }): Promise<Set<string> | null> {
+    if (!opts.projectId) return null;
+    const push = await this.prisma.project.findFirst({ where: { name: BOSS_PROJECT_NAME, archived: false }, select: { id: true } });
+    if (push && push.id === opts.projectId) return null;
+    const bossIds = await rankExcludedUserIds(this.prisma);
+    return bossIds.size ? bossIds : null;
+  }
+
   private async resolveViewUsers(
     me: { id: string; role: string },
     opts: { projectId?: string; departmentId?: string },
@@ -254,7 +269,10 @@ export class ReportsService {
       },
       orderBy: { periodStart: 'asc' },
     });
-    const items = reports
+    // BOSS 归口：杨力/书书的日报仅在「项目push」项目展示，其他项目视图过滤掉
+    const bossExclude = await this.bossExcludeFor(opts);
+    const visible = bossExclude ? reports.filter((r) => !r.ownerId || !bossExclude.has(r.ownerId)) : reports;
+    const items = visible
       .filter((r) => r.ownerId)
       .map((r) => ({
         userId: r.ownerId as string,
@@ -335,9 +353,12 @@ export class ReportsService {
       },
       orderBy: { periodStart: 'asc' },
     });
+    // BOSS 归口：杨力/书书的日报仅在「项目push」项目展示，其他项目视图过滤掉
+    const bossExclude = await this.bossExcludeFor(opts);
+    const visibleReports = bossExclude ? reports.filter((r) => !r.ownerId || !bossExclude.has(r.ownerId)) : reports;
     const dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     const buckets = new Map<string, any[]>();
-    for (const r of reports) {
+    for (const r of visibleReports) {
       if (!r.ownerId) continue;
       const key = fmtBeijingDate(r.periodStart);
       const arr = buckets.get(key) ?? [];
@@ -927,8 +948,16 @@ export class ReportsService {
     }
 
     const corrected = aiResult?.corrected?.trim() || report.rawContent;
-    const projectId =
-      aiResult?.projectId && projects.some((p) => p.id === aiResult.projectId) ? aiResult.projectId : null;
+    // BOSS 归口：杨力/书书的日报一律归属「项目push」（跳过 AI 项目判断），进展也落到该项目
+    const bossIds = await rankExcludedUserIds(this.prisma);
+    const pushProject = bossIds.has(userId)
+      ? await this.prisma.project.findFirst({ where: { name: BOSS_PROJECT_NAME, archived: false }, select: { id: true } })
+      : null;
+    const projectId = pushProject
+      ? pushProject.id
+      : aiResult?.projectId && projects.some((p) => p.id === aiResult.projectId)
+        ? aiResult.projectId
+        : null;
     // 工时：人工值优先；否则用 AI 从正文提取并归一到 0~24；两者都没有则记 0（日报必须上报工时）
     const hours = (hoursOverride === undefined ? normalizeHours(aiResult?.hours) : hoursOverride) ?? 0;
 

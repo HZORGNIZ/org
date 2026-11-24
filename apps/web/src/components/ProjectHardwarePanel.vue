@@ -55,6 +55,20 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
+      <el-table-column label="最近更新" width="160">
+        <template #default="{ row }">
+          <el-tooltip placement="top" :content="traceTip(row)">
+            <div class="hw-trace-cell">
+              <span class="hw-time">{{ relTime(row.updatedAt || row.createdAt) }}</span>
+              <span v-if="row.updatedBy" class="hw-keeper">
+                <el-avatar :size="18" :src="row.updatedBy.avatar || undefined">{{ (row.updatedBy.name || '?').slice(0, 1) }}</el-avatar>
+                {{ row.updatedBy.name }}
+              </span>
+              <span v-else class="muted">—</span>
+            </div>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column label="备注" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">{{ row.remark || '-' }}</template>
       </el-table-column>
@@ -101,6 +115,11 @@
         <el-form-item label="备注">
           <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="300" />
         </el-form-item>
+        <!-- 留痕信息：创建/最近更新时间与更新人（编辑时展示） -->
+        <div v-if="editing" class="hw-trace">
+          <span>创建：{{ fmtTime(editing.createdAt) }}</span>
+          <span>最近更新：{{ fmtTime(editing.updatedAt) }}<template v-if="editing.updatedBy"> · {{ editing.updatedBy.name }}</template></span>
+        </div>
       </el-form>
       <template #footer>
         <el-button size="small" @click="formVisible = false">取消</el-button>
@@ -171,6 +190,30 @@ const keeperOptions = computed(() => {
 });
 
 const countByStatus = (v: string) => items.value.filter((i) => i.status === v).length;
+
+// ---- 留痕展示：时间格式化与相对时间 ----
+function fmtTime(s?: string): string {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function relTime(s?: string): string {
+  if (!s) return '—';
+  const d = new Date(s).getTime();
+  if (Number.isNaN(d)) return '—';
+  const diff = Date.now() - d;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  return fmtTime(s).slice(5, 10);
+}
+function traceTip(row: any): string {
+  const updater = row.updatedBy ? ` · 更新人 ${row.updatedBy.name}` : '';
+  return `创建 ${fmtTime(row.createdAt)}｜最近更新 ${fmtTime(row.updatedAt)}${updater}`;
+}
 
 async function load() {
   loading.value = true;
@@ -279,5 +322,27 @@ defineExpose({ reload: load });
 .hw-row .half {
   flex: 1;
   min-width: 0;
+}
+.hw-trace-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+.hw-time {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.hw-trace {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

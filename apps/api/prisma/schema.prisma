@@ -325,6 +325,7 @@ model User {
   rulesCreated     ProjectRule[]      @relation("RuleAuthor") // 我发布过的项目规则
   ruleAcks         ProjectRuleAck[]   @relation("RuleAckUser") // 我点过的项目规则已阅
   notesCreated     ProjectNote[]      @relation("NoteAuthor") // 我发布过的项目纪要
+  hwUpdated        ProjectHardware[]  @relation("HardwareUpdater") // 我最近一次更新过的硬件条目（留痕）
   chatMessagesSent ProjectChatMessage[] @relation("ChatSender") // 我在项目群里发过的消息
   chatReads        ProjectChatRead[]  @relation("ChatReader") // 我的群已读位置
   invOwnedServers  InventoryServer[]   @relation("InventoryServerOwner") // 我负责的服务器（资源盘点）
@@ -511,11 +512,13 @@ model ProjectHardware {
   desc      String? // 说明（是什么/用途）
   status    String   @default("TO_PURCHASE") // TO_PURCHASE 待采购 / PURCHASING 采购中 / PURCHASED_PENDING 已采购待领取 / ASSIGNED 已分配 / RETURNED 已归还
   keeperId  String? // 保管人 userId（新建默认为项目组长/负责人）
+  updatedById String? // 最近一次更新人 userId（新建=创建人；每次修改刷新，留痕）
   fee       Float? // 硬件费用（元）；仅系统管理员可见/可改，接口对其他角色一律剥离
   remark    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  updatedBy User?   @relation("HardwareUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, createdAt])

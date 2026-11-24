@@ -190,6 +190,15 @@
             <el-button text size="small" @click="collapseAllNotes">收起全部</el-button>
           </span>
         </div>
+        <!-- 纪要督促条：常规提示；超过 7 天未更新变橙色警示，点名负责人 -->
+        <div class="note-nudge" :class="{ stale: noteStaleDays >= 7 }">
+          <template v-if="noteStaleDays >= 7">
+            ⚠️ 本项目已 {{ noteStaleDays >= 999 ? '长期' : noteStaleDays + ' 天' }}未更新项目纪要。请项目负责人（{{ project?.owner?.name || '组长' }}）组织成员发布纪要——纪要会自动同步到项目钉钉群。
+          </template>
+          <template v-else>
+            📌 请项目负责人每次进来后发布/更新项目纪要（或安排成员撰写），纪要会自动同步到项目钉钉群并通知全体成员。
+          </template>
+        </div>
         <div class="note-chips">
           <span class="note-chip" :class="{ on: noteFilter === 'ALL' }" @click="noteFilter = 'ALL'">全部 {{ notesTotal }}</span>
           <span
@@ -205,9 +214,10 @@
         <div v-if="!visibleNotes.length" class="muted rules-empty">
           {{ canPostNote ? '还没有纪要，点右上角「＋ 发布纪要」记录第一条' : '项目里还没有纪要' }}
         </div>
-        <div v-for="n in visibleNotes" :key="n.id" class="note-item" :class="{ open: !!noteExpanded[n.id] }">
+        <div v-for="(n, ni) in visibleNotes" :key="n.id" class="note-item" :class="{ open: !!noteExpanded[n.id] }">
           <div class="note-head" @click="toggleNote(n.id)">
-            <el-tag size="small" :type="noteKindTag(n.kind)" effect="plain">{{ noteKindLabel(n.kind) }}</el-tag>
+            <el-tag size="small" :type="noteKindTag(n.kind)" effect="dark">{{ noteKindLabel(n.kind) }}</el-tag>
+            <el-tag v-if="ni === 0 && noteFilter === 'ALL'" size="small" type="danger" effect="light">最新</el-tag>
             <span class="note-title">{{ n.title }}</span>
             <span class="note-caret muted">{{ noteExpanded[n.id] ? '收起 ▴' : '展开 ▾' }}</span>
           </div>
@@ -450,7 +460,28 @@
             <el-icon><Plus /></el-icon>&nbsp;新建任务
           </el-button>
         </div>
-        <el-table :data="tasks" size="small" class="tasks-table" @row-click="openTaskDetail">
+        <!-- 负责人标签筛选：全部 + 每位负责人（含任务数），点击即过滤；再点取消 -->
+        <div v-if="tasks.length" class="assignee-filter">
+          <span class="af-chip" :class="{ on: taskAssigneeFilter === '' }" @click="taskAssigneeFilter = ''">全部 {{ tasks.length }}</span>
+          <span
+            v-for="a in taskAssignees"
+            :key="a.id"
+            class="af-chip"
+            :class="{ on: taskAssigneeFilter === a.id }"
+            @click="taskAssigneeFilter = taskAssigneeFilter === a.id ? '' : a.id"
+          >
+            {{ a.name }} ×{{ a.count }}
+          </span>
+          <span
+            v-if="unassignedTaskCount"
+            class="af-chip"
+            :class="{ on: taskAssigneeFilter === 'NONE' }"
+            @click="taskAssigneeFilter = taskAssigneeFilter === 'NONE' ? '' : 'NONE'"
+          >
+            未指派 ×{{ unassignedTaskCount }}
+          </span>
+        </div>
+        <el-table :data="filteredTasks" size="small" class="tasks-table" @row-click="openTaskDetail">
           <el-table-column label="任务" min-width="220">
             <template #default="{ row }">
               <TaskUpdatePopover :task="row" @open="openTaskDetail(row)">
@@ -1379,6 +1410,26 @@ const tasksLoading = ref(false);
 const taskDrawer = ref(false);
 const currentTaskId = ref<string | null>(null);
 const taskFormVisible = ref(false);
+
+// ---- 任务清单：按负责人标签快速筛选（全部 / 每位负责人 / 未指派） ----
+const taskAssigneeFilter = ref('');
+const taskAssignees = computed(() => {
+  const m = new Map<string, { id: string; name: string; count: number }>();
+  for (const t of tasks.value) {
+    const a = t.assignee;
+    if (!a?.id) continue;
+    const cur = m.get(a.id) ?? { id: a.id, name: a.name, count: 0 };
+    cur.count++;
+    m.set(a.id, cur);
+  }
+  return [...m.values()].sort((x, y) => y.count - x.count);
+});
+const unassignedTaskCount = computed(() => tasks.value.filter((t) => !t.assignee?.id).length);
+const filteredTasks = computed(() => {
+  if (!taskAssigneeFilter.value) return tasks.value;
+  if (taskAssigneeFilter.value === 'NONE') return tasks.value.filter((t) => !t.assignee?.id);
+  return tasks.value.filter((t) => t.assignee?.id === taskAssigneeFilter.value);
+});
 const editForm = reactive({ name: '', description: '', color: '#428bff', dingtalkConversationId: '', dingtalkGroupName: '', dailyDigestEnabled: false, digestTime: '20:00', digestEveryDays: 1, archived: false, hasHardware: false, hasGithub: true, departmentIds: [] as string[], confidential: false });
 
 /** 保密项目未签协议：详情接口只回 { locked: 'NDA', nda } 锁定壳 */
@@ -1566,6 +1617,13 @@ const filteredNotes = computed(() =>
 );
 const visibleNotes = computed(() => filteredNotes.value.slice(0, noteLimit.value));
 const hiddenNoteCount = computed(() => Math.max(0, filteredNotes.value.length - noteLimit.value));
+
+/** 距最近一条纪要的天数（从未写过=9999；仅用于督促条警示） */
+const noteStaleDays = computed(() => {
+  const last = notesList.value[0]?.publishedAt;
+  if (!last) return 9999;
+  return Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+});
 
 function toggleNote(id: string) {
   noteExpanded[id] = !noteExpanded[id];
@@ -3143,6 +3201,54 @@ const infoOpen = ref(false);
   line-height: 1.5;
 }
 /* 项目纪要卡（进度/汇报/备注）：类型 chips + 可收起条目列表 */
+/* 规则/纪要区块高亮：左侧强调边条 + 浅色底，与普通说明卡区分 */
+.rules-card,
+.notes-card {
+  border-left: 3px solid var(--el-color-primary);
+  background: linear-gradient(180deg, var(--el-color-primary-light-9) 0%, transparent 72px);
+}
+/* 纪要督促条：常规浅蓝提示；≥7 天未更新转橙色警示 */
+.note-nudge {
+  margin: 2px 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-text-color-regular);
+}
+.note-nudge.stale {
+  background: #fff7ed;
+  color: #c2410c;
+  font-weight: 600;
+}
+/* 任务清单负责人标签筛选条 */
+.assignee-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+}
+.af-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 0.5px solid var(--el-border-color);
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+}
+.af-chip:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
+}
+.af-chip.on {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+  color: #fff;
+  font-weight: 600;
+}
 .note-chips {
   display: flex;
   gap: 6px;

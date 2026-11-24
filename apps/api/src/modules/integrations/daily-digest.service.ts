@@ -303,6 +303,55 @@ export class DailyDigestService {
     return { checked: due.length, sent };
   }
 
+  /**
+   * 项目纪要提醒 tick（随 digest:groups 每 15 分钟一起跑）：
+   * 已关联钉钉群、非保密的项目，最近一条项目纪要超过 7 天（或从未写过）→ 推一条提醒到项目群，
+   * 点名项目负责人组织成员发布纪要（进展/汇报/备注）。
+   * 频控：同一项目每 7 天最多提醒一次（Setting key = note-reminder:{projectId}，value={date:'YYYY-MM-DD'}）。
+   */
+  async runNoteReminderTick(): Promise<{ checked: number; reminded: number }> {
+    const today = fmtBeijing(new Date()).slice(0, 10);
+    const projects = await this.prisma.project.findMany({
+      where: { archived: false, deletedAt: null, confidential: false, dingtalkConversationId: { not: null } },
+      select: { id: true, name: true, dingtalkConversationId: true, dingtalkGroupName: true, owner: { select: { name: true } } },
+    });
+    if (!projects.length) return { checked: 0, reminded: 0 };
+    const latest = await this.prisma.projectNote.groupBy({ by: ['projectId'], _max: { publishedAt: true } });
+    const latestBy = new Map(latest.map((l) => [l.projectId, l._max.publishedAt]));
+    let reminded = 0;
+    for (const p of projects) {
+      const last = latestBy.get(p.id) ?? null;
+      const staleDays = last
+        ? Math.floor((Date.now() - new Date(last).getTime()) / 86_400_000)
+        : 999; // 从未写过纪要按「很久没写」处理
+      if (staleDays < 7) continue;
+      const key = `note-reminder:${p.id}`;
+      const setting = await this.prisma.setting.findUnique({ where: { key } });
+      const lastRemindDate = (setting?.value as any)?.date as string | undefined;
+      if (lastRemindDate && this.daysBetweenBeijing(lastRemindDate, today) < 7) continue; // 7 天内已提醒过
+      const staleText = last ? `${staleDays} 天` : '长期';
+      const ownerName = p.owner?.name ?? '项目负责人';
+      const text = [
+        `📌 纪要提醒 ·《${p.name}》`,
+        `本项目已 ${staleText}未更新项目纪要。`,
+        `@${ownerName} 请组织成员发布项目纪要（项目进度/汇报内容/项目备注均可），纪要会自动同步到本群并通知全体成员。`,
+      ].join('\n');
+      const r = await this.sendDws(['chat', '+send-to-group', '--group', p.dingtalkConversationId!, '--content', text]);
+      if (r.ok) {
+        reminded++;
+        await this.prisma.setting.upsert({
+          where: { key },
+          create: { key, value: { date: today } },
+          update: { value: { date: today } },
+        });
+        this.logger.log(`纪要提醒已发到项目群「${p.dingtalkGroupName ?? p.id}」（${staleText}未更新）`);
+      } else {
+        this.logger.warn(`纪要提醒发送失败 project=${p.id}: ${r.error}`);
+      }
+    }
+    return { checked: projects.length, reminded };
+  }
+
   /** 两个北京日期字符串 'YYYY-MM-DD' 相差天数（b - a；按 UTC 午夜解析，确定性） */
   private daysBetweenBeijing(a: string, b: string): number {
     return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);

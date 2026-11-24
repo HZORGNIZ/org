@@ -24,6 +24,16 @@
       </el-select>
     </div>
 
+    <!-- 顶部轻量统计：进行中视图展示（只统计当前成员可见的项目） -->
+    <div v-if="viewMode === 'active' && projects.length" class="proj-stats">
+      <span class="ps-item"><b>{{ projects.length }}</b> 个项目</span>
+      <span class="ps-divider"></span>
+      <span v-for="(cnt, name) in deptStats" :key="name" class="ps-item">{{ name }} <b>{{ cnt }}</b></span>
+      <span class="ps-divider"></span>
+      <span class="ps-item"><b>{{ totalTasks }}</b> 个任务</span>
+      <span class="ps-item"><b>{{ totalMembers }}</b> 名成员</span>
+    </div>
+
     <div v-loading="loading" class="grid">
       <!-- 项目列表统一按部门归类：每行一组（组头占满整行栅格），项目归入其「主部门」（组织架构里排最前的关联部门），
            未关联任何部门的归入「未归类」沉底；回收站为管理视图，保持平铺不再分组 -->
@@ -46,9 +56,17 @@
         <div class="proj-desc ellipsis-2">{{ p.description || '暂无描述' }}</div>
         <div class="proj-meta muted">
           <span>{{ p._count?.tasks || 0 }} 个任务</span>
-          <span>{{ p.members?.length || 0 }} 名成员</span>
+          <span>{{ p.memberCount ?? (p.members?.length || 0) }} 名成员</span>
           <span>{{ p.owner?.name }}</span>
+          <span v-if="viewMode === 'active' && p.lastActivityAt">· 更新于 {{ relDate(p.lastActivityAt) }}</span>
         </div>
+        <!-- 最新一条项目纪要（点击跳详情页纪要区）；无纪要时灰显提示 -->
+        <div v-if="viewMode === 'active' && p.latestNote" class="proj-note" :title="`最新纪要：${p.latestNote.title}（${noteLabel(p.latestNote.kind)}，${p.latestNote.authorName || ''} 发布）`">
+          <el-tag size="small" :type="noteTag(p.latestNote.kind)" effect="light">{{ noteLabel(p.latestNote.kind) }}</el-tag>
+          <span class="pn-title ellipsis">{{ p.latestNote.title }}</span>
+          <span class="muted pn-time">{{ relDate(p.latestNote.publishedAt) }}</span>
+        </div>
+        <div v-else-if="viewMode === 'active'" class="proj-note muted">📋 暂无纪要</div>
         <div v-if="viewMode === 'trash'" class="archived-foot">
           <el-button size="small" type="primary" plain :loading="restoringId === p.id" @click.stop="restoreFromTrash(p)">恢复</el-button>
           <el-button size="small" type="danger" plain :loading="purgingId === p.id" @click.stop="purgeForever(p)">彻底删除</el-button>
@@ -249,6 +267,39 @@ const shownProjects = computed(() =>
 /** 展示分组：按「主部门」把项目归到唯一一组（多部门项目只出现在主部门组，避免同一张卡片重复）；
  *  主部门 = 该项目关联部门里组织架构顺序最靠前的那个；未关联任何部门的归「未归类」沉底。
  *  回收站是管理视图，保持平铺（接口不返回部门，分组没有意义）。 */
+/** 顶部轻量统计：按主部门分布 + 任务/成员总数（仅进行中视图） */
+const deptStats = computed(() => {
+  const m = new Map<string, number>();
+  for (const p of projects.value) {
+    const name = p.departments?.[0]?.name ?? '未归类';
+    m.set(name, (m.get(name) ?? 0) + 1);
+  }
+  return Object.fromEntries([...m.entries()].sort((a: any, b: any) => b[1] - a[1]));
+});
+const totalTasks = computed(() => projects.value.reduce((s: number, p: any) => s + (p._count?.tasks ?? 0), 0));
+const totalMembers = computed(() => new Set(projects.value.flatMap((p: any) => (p.members || []).map((m: any) => m.userId))).size);
+
+/** 纪要类型 → 展示文案/颜色（与项目详情页一致） */
+function noteLabel(k: string) {
+  return k === 'PROGRESS' ? '进度' : k === 'REPORT' ? '汇报' : '备注';
+}
+function noteTag(k: string): 'primary' | 'success' | 'warning' {
+  return (k === 'PROGRESS' ? 'primary' : k === 'REPORT' ? 'success' : 'warning') as 'primary' | 'success' | 'warning';
+}
+/** 相对日期：今天/昨天/N 天前，超 30 天显示 MM-DD */
+function relDate(s?: string): string {
+  if (!s) return '—';
+  const d = new Date(s).getTime();
+  if (Number.isNaN(d)) return '—';
+  const days = Math.floor((Date.now() - d) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 30) return `${days} 天前`;
+  const p = (n: number) => String(n).padStart(2, '0');
+  const dt = new Date(s);
+  return `${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+}
+
 const displayGroups = computed(() => {
   if (viewMode.value === 'trash') return [{ title: '', projects: shownProjects.value }];
   const order: string[] = departments.value.map((d) => d.name).filter(Boolean);
@@ -597,6 +648,48 @@ onMounted(async () => {
 }
 .dept-filter {
   margin-bottom: 12px;
+}
+/* 顶部轻量统计条：项目总数 + 按部门分布 + 任务/成员总数 */
+.proj-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--el-color-primary-light-9);
+  border-left: 3px solid var(--el-color-primary);
+  font-size: 13px;
+}
+.ps-item {
+  color: var(--el-text-color-regular);
+}
+.ps-item b {
+  font-size: 15px;
+  color: var(--el-color-primary);
+}
+.ps-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--el-border-color);
+}
+/* 卡片最新纪要行 */
+.proj-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.proj-note .pn-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--el-text-color-regular);
+}
+.proj-note .pn-time {
+  white-space: nowrap;
+  font-size: 12px;
 }
 .view-tabs {
   margin-bottom: var(--sp-3);

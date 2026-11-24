@@ -25,6 +25,13 @@ export class DailyDigestWorker implements OnApplicationBootstrap, OnModuleDestro
         if (job.name === 'groups-tick') {
           const r = await this.digest.runGroupTick();
           if (r.sent) this.logger.log(`项目群发 tick：候选 ${r.checked} 个，实际发送 ${r.sent} 个`);
+          // 纪要提醒：7 天无项目纪要的项目推提醒到项目群（每项目 7 天最多一次，随 tick 顺带检查）
+          try {
+            const nr = await this.digest.runNoteReminderTick();
+            if (nr.reminded) this.logger.log(`纪要提醒 tick：检查 ${nr.checked} 个项目，提醒 ${nr.reminded} 个`);
+          } catch (e) {
+            this.logger.warn(`纪要提醒 tick 异常: ${(e as Error).message}`);
+          }
           return;
         }
         if (job.name !== 'digest') return;
