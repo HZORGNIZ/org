@@ -17,11 +17,31 @@
       </el-radio-group>
       <!-- 全局模糊搜索：项目名 / 描述 / 部门名 / 成员姓名（前端内存过滤） -->
       <el-input v-model="searchKw" class="proj-search" size="small" clearable :prefix-icon="Search" placeholder="搜索项目名 / 描述 / 成员姓名…" />
-      <!-- 紧凑（默认，快速扫视）/ 详细（完整卡片，保留进展拖拽合并）双模式，偏好存 localStorage -->
-      <el-radio-group v-if="viewMode === 'active'" :model-value="compactMode" size="small" class="mode-toggle" @change="(v: any) => setCompact(!!v)">
-        <el-radio-button :value="true">紧凑</el-radio-button>
-        <el-radio-button :value="false">详细</el-radio-button>
-      </el-radio-group>
+    </div>
+
+    <!-- 顶部快捷导航：部门 chips + 项目迷你卡（点击定位到下方完整卡片并高亮），原卡片样式不动 -->
+    <div v-if="showSide && sideItems.length > 1" class="qnav">
+      <div class="qn-row">
+        <span
+          v-for="it in sideItems"
+          :key="it.key"
+          class="qn-chip"
+          :class="{ on: !searching && sideFilter === it.key }"
+          @click="pickSide(it.key)"
+        >{{ it.name }}<b>{{ it.count }}</b></span>
+      </div>
+      <div v-if="quickProjects.length" class="qn-row qn-projs">
+        <span
+          v-for="p in quickProjects"
+          :key="p.id"
+          class="qn-proj"
+          :title="`定位到「${p.name}」`"
+          @click="locateProject(p)"
+        >
+          <i class="qn-dot" :style="{ background: p.color || '#428bff' }"></i>
+          <span class="ellipsis">{{ p.name }}</span>
+        </span>
+      </div>
     </div>
 
     <!-- 顶部轻量统计：进行中视图展示（只统计当前成员可见的项目） -->
@@ -34,22 +54,7 @@
       <span class="ps-item"><b>{{ totalMembers }}</b> 名成员</span>
     </div>
 
-    <!-- 左右两栏：左侧部门导航（sticky，替代原部门下拉），右侧项目卡片网格 -->
-    <div class="board">
-      <aside v-if="showSide && sideItems.length > 1" class="dept-side">
-        <div
-          v-for="it in sideItems"
-          :key="it.key"
-          class="ds-item"
-          :class="{ on: !searching && sideFilter === it.key }"
-          :title="`${it.name}（${it.count} 个项目）`"
-          @click="pickSide(it.key)"
-        >
-          <span class="ds-name ellipsis">{{ it.name }}</span>
-          <span class="ds-count">{{ it.count }}</span>
-        </div>
-      </aside>
-      <div v-loading="loading" class="grid" :class="{ compact: viewMode === 'active' && compactMode }">
+    <div v-loading="loading" class="grid">
       <!-- 项目列表统一按部门归类：每行一组（组头占满整行栅格），项目归入其「主部门」（组织架构里排最前的关联部门），
            未关联任何部门的归入「未归类」沉底；回收站为管理视图，保持平铺不再分组 -->
       <template v-for="g in displayGroups" :key="g.title || '_all'">
@@ -57,7 +62,7 @@
         <span class="dept-group-name">{{ g.title }}</span>
         <span class="muted">{{ g.projects.length }} 个项目</span>
       </div>
-      <div v-for="p in g.projects" :key="p.id" class="project-card" @click="goDetail(p)">
+      <div v-for="p in g.projects" :id="`qcard-${p.id}`" :key="p.id" class="project-card" :class="{ flash: flashId === p.id }" @click="goDetail(p)">
         <div class="proj-head">
           <div class="proj-color" :style="{ background: p.color || '#428bff' }"></div>
           <span class="proj-name ellipsis">{{ p.name }}</span>
@@ -134,7 +139,6 @@
       </template>
       <div v-if="!projects.length && !loading" class="muted empty">{{ viewMode === 'archived' ? '没有已存档的项目' : viewMode === 'trash' ? '回收站为空' : '还没有项目，点击右上角创建' }}</div>
       <div v-else-if="loading === false && projects.length && !listTotal" class="muted empty">{{ searching ? '无匹配项目，换个关键词试试' : '该部门下暂无项目' }}</div>
-      </div>
     </div>
 
     <!-- 新建项目 -->
@@ -247,12 +251,12 @@ const auth = useAuthStore();
 const projects = ref<any[]>([]);
 const loading = ref(false);
 const departments = ref<any[]>([]);
-// 左侧部门导航选中（按主部门名过滤，'' = 全部；搜索生效时忽略）
+// 部门 chips 选中（按主部门名过滤，'' = 全部；搜索生效时忽略）
 const sideFilter = ref('');
 // 全局模糊搜索关键词：项目名 / 描述 / 部门名 / 成员姓名
 const searchKw = ref('');
-// 紧凑模式（active 视图默认开启，偏好持久化）
-const compactMode = ref(localStorage.getItem('projects-compact') !== '0');
+// 快捷定位：点顶部迷你卡后滚动到对应完整卡片并短暂高亮
+const flashId = ref('');
 // 视图：进行中 / 待我审批 / 我的申请 / 已存档 / 回收站（后三者均不显示在首页与进行中列表）
 const viewMode = ref<'active' | 'pending' | 'mine' | 'archived' | 'trash'>('active');
 const archivedCount = ref(0);
@@ -306,7 +310,7 @@ const searchHits = computed(() => {
 /** 视图底表：以前按部门下拉（deptFilter by id）筛，现由左侧导航/搜索接管，直接取全量 */
 const shownProjects = computed(() => projects.value);
 
-/** 左侧部门导航显示条件：进行中 / 已存档（pending/mine 少量平铺，trash 为管理视图不分组） */
+/** 顶部快捷导航显示条件：进行中 / 已存档（pending/mine 少量平铺，trash 为管理视图不分组） */
 const showSide = computed(() => viewMode.value === 'active' || viewMode.value === 'archived');
 
 // ---- 项目列表统一按部门归类（部门顺序沿用组织架构：sortOrder → createdAt） ----
@@ -415,16 +419,24 @@ const sideItems = computed(() => {
 /** 当前可见项目总数（搜索/部门过滤后的空态判断） */
 const listTotal = computed(() => displayGroups.value.reduce((s, g) => s + g.projects.length, 0));
 
-/** 点击左侧导航项：选中或取消；有搜索词时点击先清空搜索 */
+/** 点击部门 chip：选中或取消；有搜索词时点击先清空搜索 */
 function pickSide(key: string) {
   if (searching.value) searchKw.value = '';
   sideFilter.value = sideFilter.value === key ? '' : key;
 }
 
-/** 紧凑模式切换并持久化（详细模式保留完整卡片与进展拖拽合并） */
-function setCompact(v: boolean) {
-  compactMode.value = v;
-  localStorage.setItem('projects-compact', v ? '1' : '0');
+/** 顶部快捷迷你卡：当前范围（搜索/部门过滤后）的项目列表 */
+const quickProjects = computed(() => displayGroups.value.flatMap((g) => g.projects));
+
+/** 点迷你卡滚动定位到完整卡片并高亮 1.6s（不改列表样式，只做快速检索） */
+function locateProject(p: any) {
+  const el = document.getElementById(`qcard-${p.id}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  flashId.value = p.id;
+  window.setTimeout(() => {
+    if (flashId.value === p.id) flashId.value = '';
+  }, 1600);
 }
 
 /** 切视图：重置部门选中（搜索词保留），再拉数据 */
@@ -721,65 +733,77 @@ onMounted(async () => {
 
 <style scoped>
 .grid {
-  flex: 1;
-  min-width: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
-/* 左右两栏：左侧 sticky 部门导航 + 右侧卡片网格（<900px 降级为顶部横向 chip 条） */
-.board {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.dept-side {
-  width: 132px;
-  flex-shrink: 0;
-  position: sticky;
-  top: 12px;
+/* 顶部快捷导航：部门 chips + 项目迷你卡（点击定位到下方完整卡片，原卡片样式不动） */
+.qnav {
+  margin-bottom: 14px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  background: #fff;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
+  gap: 8px;
 }
-.ds-item {
+.qn-row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  align-items: center;
+}
+.qn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 14px;
+  font-size: 12px;
   color: var(--el-text-color-regular);
+  background: var(--el-fill-color);
   cursor: pointer;
 }
-.ds-item:hover {
-  background: var(--el-fill-color-light);
+.qn-chip:hover {
+  background: var(--el-fill-color-dark);
 }
-.ds-item.on {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  font-weight: 600;
+.qn-chip.on {
+  color: #fff;
+  background: var(--el-color-primary);
 }
-.ds-name {
-  min-width: 0;
+.qn-chip b {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.75;
 }
-.ds-count {
-  flex-shrink: 0;
+.qn-projs {
+  padding-top: 2px;
+}
+.qn-proj {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 3px 10px;
+  border-radius: 14px;
   font-size: 12px;
-  line-height: 18px;
-  padding: 0 7px;
-  border-radius: 9px;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color);
-}
-.ds-item.on .ds-count {
-  color: var(--el-color-primary);
+  color: var(--el-text-color-regular);
   background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.qn-proj:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+.qn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.qn-proj .ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 搜索框：占 view-tabs 剩余空间 */
 .proj-search {
@@ -796,36 +820,15 @@ onMounted(async () => {
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
 }
-/* 紧凑模式：小卡片快速扫视——隐藏描述/部门行/进展列表，保留名称+标签+meta+最新纪要 */
-.grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+/* 快捷定位高亮：点顶部迷你卡后目标完整卡片闪两下 */
+.project-card.flash {
+  animation: qcard-flash 0.8s ease-in-out 2;
 }
-.grid.compact .project-card {
-  padding: 12px 14px;
-}
-.grid.compact .proj-name {
-  font-size: 14px;
-}
-.grid.compact .proj-desc,
-.grid.compact .proj-dept,
-.grid.compact .upd-list,
-.grid.compact .upd-empty {
-  display: none;
+@keyframes qcard-flash {
+  0%, 100% { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05); }
+  50% { box-shadow: 0 0 0 3px var(--el-color-primary-light-5); }
 }
 @media (max-width: 900px) {
-  .board {
-    flex-direction: column;
-  }
-  .dept-side {
-    position: static;
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding: 6px;
-  }
-  .ds-item {
-    flex-shrink: 0;
-  }
   .proj-search {
     width: 100%;
     margin-left: 0;
