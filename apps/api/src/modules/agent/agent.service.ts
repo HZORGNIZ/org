@@ -57,7 +57,7 @@ const MEMBER_TOOLS = new Set([
   'project_reports',
 ]);
 /** 员工档可用的动作：只能改自己的任务/交自己的日报周报/安排自己的工作时间/管自己的日程；会议、催办、下发、广播一律不给 */
-const MEMBER_ACTIONS = new Set(['TASK_PATCH', 'DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE', 'EVENT_CREATE', 'EVENT_DELETE', 'TWIN_MESSAGE_SEND']);
+const MEMBER_ACTIONS = new Set(['TASK_PATCH', 'DAILY_SUBMIT', 'WEEKLY_SUBMIT', 'WORK_SCHEDULE_SET', 'BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE', 'EVENT_CREATE', 'EVENT_DELETE']);
 
 /** 允许的动作类型：后端只生成计划，执行由前端确认后调现有接口或 /agent 执行路由（建任务/催逾期/广播通知均走后者，需叠加通知副作用） */
 const ACTION_KINDS = new Set([
@@ -80,7 +80,6 @@ const ACTION_KINDS = new Set([
   'BOOKING_DECIDE',
   'EVENT_CREATE',
   'EVENT_DELETE',
-  'TWIN_MESSAGE_SEND',
 ]);
 
 // ---- 专属机器人注册表 ----
@@ -107,9 +106,6 @@ export interface AgentBotDef {
   tools: Set<string> | null;
   actions: Set<string> | null;
 }
-
-/** 老师分身唯一可执行动作：把成员的留言正式递给老师（建 TwinMessage + 钉钉私聊/站内信通知老师） */
-const TWIN_ACTIONS = new Set(['TWIN_MESSAGE_SEND']);
 
 export const AGENT_BOTS: AgentBotDef[] = [
   // ---- 我的助理：成员唯一日常助手（写日报/查待办/管日程）；tools/actions 为 null=沿用档位白名单，
@@ -140,34 +136,11 @@ export const AGENT_BOTS: AgentBotDef[] = [
     tools: new Set(['owner_availability', 'owner_agenda', 'owner_bookings', 'my_tasks', 'my_today', 'my_work_schedule']),
     actions: new Set(['BOOKING_CREATE', 'TIME_SLOT_SET', 'BOOKING_DECIDE']),
   },
-  // ---- 老师分身：以老师人设陪聊任何事；只读 + 留言转本人（actions=TWIN_ACTIONS），拿不准的事引导留言/预约本人 ----
-  {
-    key: 'twin-shushu',
-    name: '书书老师分身',
-    short: '舒',
-    desc: '书书老师的 AI 分身：项目、工作、成长什么都可以聊；需要她本人拍板的事，会帮你留言或引导你预约她的时间',
-    greeting: '我是书书老师的分身，什么事都可以跟我聊；需要书书老师本人拍板的事，我会帮你留言（她会在钉钉收到），或帮你预约她的时间。',
-    placeholder: '和书书老师聊聊…',
-    prompt: 'manager.bot.twin.shushu',
-    tools: null,
-    actions: TWIN_ACTIONS,
-  },
-  {
-    key: 'twin-yangli',
-    name: '杨老师分身',
-    short: '杨',
-    desc: '杨力老师的 AI 分身：技术方案、项目方向、资源协调都能聊；需要他本人决定的事，会帮你留言或引导你预约他的时间',
-    greeting: '我是杨力老师的分身，什么事都可以跟我聊；需要杨老师本人拍板的事，我会帮你留言（他会在钉钉收到），或帮你预约他的时间。',
-    placeholder: '和杨老师聊聊…',
-    prompt: 'manager.bot.twin.yangli',
-    tools: null,
-    actions: TWIN_ACTIONS,
-  },
 ];
 
 const BOT_KEYS = new Set(AGENT_BOTS.map((b) => b.key));
 
-/** 旧版机器人 key → 新 key 映射（收敛 9→4 后历史会话/旧前端照常工作） */
+/** 旧版机器人 key → 新 key 映射（收敛后历史会话/旧前端照常工作）；老师分身已下线，旧 twin key 回落到「我的助理」 */
 const LEGACY_BOT_MAP: Record<string, string> = {
   general: 'assistant',
   project: 'assistant',
@@ -178,6 +151,8 @@ const LEGACY_BOT_MAP: Record<string, string> = {
   myday: 'assistant',
   shushu: 'booking',
   yangli: 'booking',
+  'twin-shushu': 'assistant',
+  'twin-yangli': 'assistant',
 };
 
 /** 校验机器人 key：非法/为空回落「我的助理」；旧版 key 走映射（历史会话无缝迁移） */
@@ -448,8 +423,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         : '',
       // 约时间机器人（合并版）：botRun 带动态识别的被约老师；没识别到时上下文会指导模型先问约谁
       bot.key === 'booking' ? await this.buildScheduleBotContext(me, botRun) : '',
-      // 老师分身：本人视角=留言收件箱（打开即已读）；访客视角=留言动作说明
-      bot.key.startsWith('twin-') ? await this.buildTwinBotContext(me, botRun) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -1755,39 +1728,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     ].join('\n');
   }
 
-  /** 分身机器人上下文：老师本人=留言收件箱（打开即已读）；其他成员=提醒可用 TWIN_MESSAGE_SEND 正式留言 */
-  private async buildTwinBotContext(me: CurrentUserPayload, bot: AgentBotDef): Promise<string> {
-    const owner = await this.resolveBotOwner(bot);
-    if (!owner) {
-      return `【${bot.name}】老师「${bot.ownerName ?? ''}」账号未找到或已停用：留言功能暂不可用，请如实告知用户联系管理员绑定账号。`;
-    }
-    const isOwner = owner.id === me.id;
-    if (isOwner) {
-      // 老师打开自己的分身对话 = 看收件箱：注入未读留言并把它们标记已读（下次进来只剩新留言）
-      const unread = await this.prisma.twinMessage.findMany({
-        where: { ownerId: owner.id, status: 'UNREAD' },
-        orderBy: { createdAt: 'asc' },
-        take: 20,
-        select: { id: true, content: true, createdAt: true, requester: { select: { name: true } } },
-      });
-      if (unread.length) {
-        await this.prisma.twinMessage.updateMany({ where: { id: { in: unread.map((u) => u.id) } }, data: { status: 'READ', readAt: new Date() } });
-      }
-      return [
-        `【${bot.name}】当前说话的人=${me.name}（就是${owner.name}老师本人）。这是你自己的分身，也是你的留言收件箱。`,
-        unread.length
-          ? `【未读留言 ${unread.length} 条，已自动标记已读】${unread.map((u) => `${u.requester?.name ?? ''}（${fmtBeijing(u.createdAt).slice(5, 16)}，messageId=${u.id}）：${u.content}`).join(' ｜ ')}。第一句话就要逐条向老师汇报这些留言。`
-          : '【留言收件箱】暂无新留言。成员通过你的分身给你留言时，这里会出现。',
-        `你可以用只读工具查真实数据帮老师答疑；需要老师拍板的事照实说需要本人处理，不要替老师做决定。`,
-      ].join('\n');
-    }
-    return [
-      `【${bot.name}】当前说话的人=${me.name}（访客/成员，不是${owner.name}本人）。`,
-      `你是${owner.name}的人设分身：只读工具可查真实数据回答用户；需要老师本人拍板的事不要替老师承诺。`,
-      `留言机制：用户想把事情正式转给${owner.name}时（或你判断这事值得老师亲自看），把要办的事、背景、期望整理成一段话，输出动作 {"kind":"TWIN_MESSAGE_SEND","content":"留言正文"}（出确认卡，确认后老师收到钉钉私聊+站内信）；输出前先跟用户口头确认内容没问题。约时间当面聊则引导用户切到「约时间」助手。`,
-    ].join('\n');
-  }
-
   private async toolOwnerAvailability(bot: AgentBotDef | undefined, args: any) {
     const owner = await this.resolveBotOwner(bot);
     if (!owner) return { error: bot?.ownerName ? `被约人「${bot.ownerName}」账号未绑定或已停用，请管理员检查` : '还没确认要约哪位老师：请先问用户约书书老师还是杨力老师，确认后再查' };
@@ -2344,8 +2284,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
           return await this.planEventCreate(me, action);
         case 'EVENT_DELETE':
           return await this.planEventDelete(me, action);
-        case 'TWIN_MESSAGE_SEND':
-          return await this.planTwinMessage(me, bot, action);
       }
     } catch (e: any) {
       this.logger.warn(`Agent 动作计划失败 kind=${kind}: ${e?.message ?? e}`);
@@ -3876,29 +3814,6 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         insideFree ? '这落在老师登记的可约时段内' : '注意：这不在老师登记的可约时段内，老师可能驳回',
         materialTip,
       ].filter(Boolean).join('；'),
-    };
-  }
-
-  /** 分身留言计划：把成员对老师说的、需要老师本人知道的事整理成留言（确认后建 TwinMessage 并钉钉通知老师） */
-  private async planTwinMessage(me: CurrentUserPayload, bot: AgentBotDef | undefined, action: any) {
-    const owner = await this.resolveBotOwner(bot);
-    if (!owner) return { kind: 'TWIN_MESSAGE_SEND', needClarify: 'owner', reason: `老师「${bot?.ownerName ?? ''}」账号还没绑定或已停用，暂时收不了留言，请联系管理员` };
-    if (owner.id === me.id) {
-      return { kind: 'TWIN_MESSAGE_SEND', needClarify: 'self', reason: '你就是这位老师本人，不用给自己留言；别人给你的留言会在你打开自己的分身对话时自动展示' };
-    }
-    const content = String(action?.content ?? '').trim().slice(0, 500);
-    if (content.length < 2) {
-      return { kind: 'TWIN_MESSAGE_SEND', needClarify: 'content', reason: '留言内容太短：请把想对老师说的话整理清楚（要办什么事、背景、期望结果），再帮你留言' };
-    }
-    return {
-      kind: 'TWIN_MESSAGE_SEND',
-      label: `给${owner.name}老师留言`,
-      ownerId: owner.id,
-      ownerName: owner.name,
-      requesterName: me.name,
-      botKey: bot?.key ?? '',
-      content,
-      hint: '确认后这条留言会正式记录，老师会收到钉钉私聊与站内信提醒；老师打开自己的分身对话即可看到并标记已读',
     };
   }
 

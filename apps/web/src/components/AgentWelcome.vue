@@ -99,19 +99,10 @@ const emit = defineEmits<{ (e: 'fill', text: string): void; (e: 'go', card: { bo
 
 const ov = computed(() => props.overview ?? null);
 
-/** 进门卡片：成员 4 张 / 管理者（org/project 档）4 张；split 卡内含子选项（分身选人） */
+/** 进门卡片：成员 3 张 / 管理者（org/project 档）4 张；split 卡内含子选项 */
 interface WelcomeCard { title: string; desc: string; bot?: string; text?: string; split?: boolean; opts?: { label: string; bot: string; text?: string }[] }
 const CARDS: Record<'org' | 'project' | 'member', WelcomeCard[]> = {
   member: [
-    {
-      title: '跟老师聊',
-      desc: '书书老师 / 杨老师分身，什么事都能聊',
-      split: true,
-      opts: [
-        { label: '书书老师分身', bot: 'twin-shushu' },
-        { label: '杨老师分身', bot: 'twin-yangli' },
-      ],
-    },
     { title: '写我的日报', desc: 'AI 拉取今天的进展自动成稿，我确认后提交', bot: 'assistant', text: '帮我写今天的日报' },
     { title: '没处理的任务', desc: '待办清单 + 逾期提醒 + 建议顺序', bot: 'assistant', text: '列出我还没处理的任务和逾期项' },
     { title: '我的会 · 约时间', desc: '查我的日程；约书书老师 / 杨老师的时间', bot: 'booking', text: '我想约老师的时间' },
@@ -286,7 +277,7 @@ const rankSub = computed(() => {
 }
 .aw-warn { color: #f56c6c; }
 
-/* 进门卡片：2×2 网格，标题 + 一句话说明；split 卡内含分身选人子按钮 */
+/* 进门卡片：2×2 网格，标题 + 一句话说明；split 卡内含子按钮 */
 .aw-cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
