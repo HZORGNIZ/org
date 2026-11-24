@@ -1593,13 +1593,13 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 单日可约口径（共享方法，三处同源）：
-   * 开放基准 = 周排班(UserWorkSlot) ∪ 临时开放(UserTimeSlot FREE) ∪ 日程开放(PersonalEvent FREE)
+   * 开放基准 = 老师主动登记的开放时段：临时开放(UserTimeSlot FREE) ∪ 日程「开放可约」(PersonalEvent FREE)
+   *   —— 周排班(UserWorkSlot)只是工作时间，不算可约：老师没主动设开放的日子一律不可约
    * 占用 = 会议 + 预约(待确认/已确认) + 日程安排/外出/占用(EVENT/OUTING/BUSY) + 临时不可约(UserTimeSlot BUSY)
    * 消费方：computeAvailability(约时间机器人/7天卡)、buildDayTimeline(我的日程·日历+周历)、insideOwnerFree(预约确认卡校验)
    */
   private dayOpenRanges(
     input: {
-      weekly: { weekday: number; startMin: number; endMin: number }[];
       oneoffs: { date: Date; startMin: number; endMin: number; kind: string; note?: string | null }[];
       events: { date: Date; startMin: number; endMin: number; kind: string; title: string; note?: string | null }[];
       meetings: { startAt: Date; endAt: Date; title: string; status: string }[];
@@ -1609,13 +1609,11 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
   ) {
     const dayStart = day.getTime();
     const dayEnd = this.addDays(day, 1).getTime();
-    const dow = this.bjWeekdayOf(day);
     const dayOffs = input.oneoffs.filter((o) => o.date.getTime() === dayStart);
     const dayEvents = input.events.filter((e) => e.date.getTime() === dayStart);
-    // 开放可约基准 = 周排班 + 临时可约(UserTimeSlot FREE) + 日程里点「开放可约」的时段(PersonalEvent FREE)
-    // 只认老师登记的排班/开放时段：没登记的天一律不可约（绝不把老师没开放的时间当成空闲）
+    // 开放可约基准 = 临时可约(UserTimeSlot FREE) + 日程里点「开放可约」的时段(PersonalEvent FREE)
+    // 只认老师主动登记的开放时段：没登记的天一律不可约（周排班≠可约，绝不把没开放的时间当成空闲）
     const base = [
-      ...input.weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
       ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
       ...dayEvents.filter((e) => e.kind === 'FREE').map((e) => ({ startMin: e.startMin, endMin: e.endMin })),
     ];
@@ -1657,11 +1655,10 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     return { freeRanges, busy: busy.sort((a, b) => a.time.localeCompare(b.time)), note };
   }
 
-  /** 老师某几天的空档：工作时段模板 + 临时可约/不可约 + 会议 + 预约（待确认也占位，避免撞车） */
+  /** 老师某几天的空档：主动登记的开放时段 − 会议/预约/日程占用（待确认预约也占位，避免撞车） */
   private async computeAvailability(ownerId: string, fromDay: Date, toDay: Date) {
     const rangeEnd = this.addDays(toDay, 1);
-    const [weekly, oneoffs, events, meetings, bookings] = await Promise.all([
-      this.prisma.userWorkSlot.findMany({ where: { userId: ownerId }, select: { weekday: true, startMin: true, endMin: true } }),
+    const [oneoffs, events, meetings, bookings] = await Promise.all([
       this.prisma.userTimeSlot.findMany({
         where: { userId: ownerId, date: { gte: fromDay, lt: rangeEnd } },
         select: { date: true, startMin: true, endMin: true, kind: true, note: true },
@@ -1697,7 +1694,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
     }[] = [];
 
     for (let cur = fromDay; cur.getTime() <= toDay.getTime(); cur = this.addDays(cur, 1)) {
-      const r = this.dayOpenRanges({ weekly, oneoffs, events, meetings, bookings }, cur);
+      const r = this.dayOpenRanges({ oneoffs, events, meetings, bookings }, cur);
       const row: (typeof days)[number] = {
         date: fmtBeijingDate(cur),
         weekday: weekdayLabel(this.bjWeekdayOf(cur)),
@@ -1863,8 +1860,7 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       const clamped = Math.min(Math.max(t.getTime(), day.getTime()), dayEnd.getTime());
       return Math.round((clamped - day.getTime()) / 60000);
     };
-    const [workSlots, oneoffs, meetings, bookings, events] = await Promise.all([
-      this.prisma.userWorkSlot.findMany({ where: { userId, weekday: dow }, orderBy: { startMin: 'asc' } }),
+    const [oneoffs, meetings, bookings, events] = await Promise.all([
       this.prisma.userTimeSlot.findMany({
         where: { userId, date: day },
         select: { date: true, startMin: true, endMin: true, kind: true, note: true },
@@ -1962,11 +1958,10 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       });
     }
     items.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
-    // 空余/可约口径与约时间机器人完全同源（dayOpenRanges 共享方法）：基准=周排班∪临时开放∪日程FREE；占用=会议+预约+日程安排/外出/占用
-    // 与 computeAvailability 保持一致：不再做 9:00-18:00 兜底，没登记排班/开放时段就没有空余（前端据此给登记引导）
+    // 空余/可约口径与约时间机器人完全同源（dayOpenRanges 共享方法）：基准=老师主动登记的开放时段（日程FREE∪临时开放）；占用=会议+预约+日程安排/外出/占用
+    // 周排班只是工作时间不算可约；没登记开放的日子就没有空余（前端据此给登记引导）
     const r = this.dayOpenRanges(
       {
-        weekly: workSlots.map((w) => ({ weekday: w.weekday, startMin: w.startMin, endMin: w.endMin })),
         oneoffs,
         events: events.map((e) => ({ date: e.date, startMin: e.startMin, endMin: e.endMin, kind: e.kind, title: e.title, note: e.note })),
         meetings: meetings.map((m) => ({ startAt: m.startAt, endAt: m.endAt, title: m.title, status: m.status })),
@@ -1981,14 +1976,14 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       time: slotRangeLabel(x.startMin, x.endMin),
       openForBooking: true,
     }));
-    // scheduleBasis：可约时段的基准来源——custom=本人排班/登记；default=未登记（前端据此提示先登记可约时间）
+    // scheduleBasis：可约时段的基准来源——custom=已登记开放时段；default=未登记（前端据此提示先登记可约时间）
     return {
       date: fmtBeijingDate(day),
       weekday: weekdayLabel(dow),
       dow,
       items,
       free: freeItems,
-      scheduleBasis: workSlots.length || oneoffs.length || events.some((e) => e.kind === 'FREE') ? 'custom' : 'default',
+      scheduleBasis: oneoffs.some((o) => o.kind !== 'BUSY') || events.some((e) => e.kind === 'FREE') ? 'custom' : 'default',
     };
   }
 

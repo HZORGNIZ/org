@@ -40,8 +40,8 @@
       </div>
       <!-- 未登记可约时间：成员约不到，引导先登记 -->
       <div v-if="view === 'day' && tl?.scheduleBasis === 'default'" class="myday-sched-tip">
-        你还没有登记可约时间（周排班或「开放可约」时段），<b>成员约不到你</b>。
-        去周历里拖一段空余点「开放可约」，或打开智能体的「我的日程」小助理说「设置排班」。
+        你还没有登记「开放可约」时段，<b>成员约不到你</b>。
+        去周历里拖一段空余点「开放可约」，或打开智能体的「我的日程」小助理说「设置开放时间」。
       </div>
     </div>
 
@@ -221,7 +221,7 @@
               </template>
               <template v-else-if="wkChip.mode === 'free'">
                 <button class="wk-chip wc-cancel-open" @click="wkCancelOpen">取消开放</button>
-                <span class="wk-chip-note">来自排班/开放时段</span>
+                <span class="wk-chip-note">来自登记的开放时段</span>
               </template>
               <template v-else>
                 <button class="wk-chip wc-more" @click="wkEditEvent">编辑</button>
@@ -914,7 +914,7 @@ async function wkCancelOpen() {
   const day = weekDays.value[c.col];
   const covering = (day?.items ?? []).filter((x: any) => x.type === 'EVENT' && x.kind === 'FREE' && x.startMin <= c.a && x.endMin >= c.b);
   if (!covering.length) {
-    ElMessage.info('该时段来自每周固定排班：请到排班设置里调整，或先用「外出/占用」盖住这段时间');
+    ElMessage.info('该时段不是日程里登记的「开放可约」（可能来自临时开放）：请到「我的日程」里找到对应时段调整，或先用「外出/占用」盖住');
     closeWkChip();
     return;
   }
