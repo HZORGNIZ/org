@@ -1594,11 +1594,16 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
   /** 老师某几天的空档：工作时段模板 + 临时可约/不可约 + 会议 + 预约（待确认也占位，避免撞车） */
   private async computeAvailability(ownerId: string, fromDay: Date, toDay: Date) {
     const rangeEnd = this.addDays(toDay, 1);
-    const [weekly, oneoffs, meetings, bookings] = await Promise.all([
+    const [weekly, oneoffs, events, meetings, bookings] = await Promise.all([
       this.prisma.userWorkSlot.findMany({ where: { userId: ownerId }, select: { weekday: true, startMin: true, endMin: true } }),
       this.prisma.userTimeSlot.findMany({
         where: { userId: ownerId, date: { gte: fromDay, lt: rangeEnd } },
         select: { date: true, startMin: true, endMin: true, kind: true, note: true },
+      }),
+      this.prisma.personalEvent.findMany({
+        // 老师在「我的日程」登记的时段是空档计算的权威数据源：FREE=开放可约，EVENT/OUTING/BUSY=占用
+        where: { userId: ownerId, date: { gte: fromDay, lt: rangeEnd } },
+        select: { date: true, startMin: true, endMin: true, kind: true, title: true, note: true },
       }),
       this.prisma.meeting.findMany({
         where: {
@@ -1630,9 +1635,12 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
       const dayEnd = this.addDays(cur, 1).getTime();
       const dow = this.bjWeekdayOf(cur);
       const dayOffs = oneoffs.filter((o) => o.date.getTime() === dayStart);
+      const dayEvents = events.filter((e) => e.date.getTime() === dayStart);
+      // 开放可约基准 = 周排班 + 临时可约(UserTimeSlot FREE) + 日程里点「开放可约」的时段(PersonalEvent FREE)
       const base = [
         ...weekly.filter((w) => w.weekday === dow).map((w) => ({ startMin: w.startMin, endMin: w.endMin })),
         ...dayOffs.filter((o) => o.kind !== 'BUSY').map((o) => ({ startMin: o.startMin, endMin: o.endMin })),
+        ...dayEvents.filter((e) => e.kind === 'FREE').map((e) => ({ startMin: e.startMin, endMin: e.endMin })),
       ];
       // 只认老师登记的排班/开放时段：没登记的天一律不可约（绝不把老师没开放的时间当成空闲）
       const baseRanges = base;
@@ -1640,6 +1648,12 @@ export class AgentService implements OnModuleInit, OnModuleDestroy {
         .filter((o) => o.kind === 'BUSY')
         .map((o) => ({ startMin: o.startMin, endMin: o.endMin }));
       const busy: { time: string; label: string }[] = [];
+      // 日程里的日程安排/外出/占用一律视为已占用（老师自己写的安排当然不能被约）
+      for (const e of dayEvents.filter((x) => x.kind !== 'FREE')) {
+        blocks.push({ startMin: e.startMin, endMin: e.endMin });
+        const label = e.kind === 'BUSY' ? (e.note ? `不可约：${e.note}` : '不可约') : e.kind === 'OUTING' ? `外出：${e.title}` : `日程：${e.title}`;
+        busy.push({ time: slotRangeLabel(e.startMin, e.endMin), label });
+      }
       const clampRange = (s: Date, e: Date) => {
         const sMin = Math.max(0, Math.round((Math.max(s.getTime(), dayStart) - dayStart) / 60000));
         const eMin = Math.min(1440, Math.round((Math.min(e.getTime(), dayEnd) - dayStart) / 60000));
