@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { ledDeptWhere } from '../../common/dept-authority';
 import { rankExcludedUserIds } from '../../common/rank-exclude';
@@ -48,6 +49,7 @@ function periodRange(period: Period): { gte: Date; lt: Date; label: string } {
   };
 }
 
+@Injectable()
 export class StatsService {
   constructor(private prisma: PrismaService) {}
 
